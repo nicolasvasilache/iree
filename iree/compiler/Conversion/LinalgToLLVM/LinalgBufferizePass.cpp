@@ -263,7 +263,11 @@ IREE::PlaceholderOp createPlaceholderOp(OpBuilder &b, Location loc,
     // TODO: evolve to target flow ops directly with additional shape annotation
     // so we do not need to type erase.
     bufferType = MemRefType::get(
-        SmallVector<int64_t>(bufferType.getRank(), ShapedType::kDynamicSize),
+        // SmallVector<int64_t>(bufferType.getRank(), ShapedType::kDynamicSize),
+        // This hack is necessary because of information loss in hal.interface
+        // ops at this time, will go away once we move to flow.
+        // Only works for a 2x2x2 matmul.
+        {2, 2},
         bufferType.getElementType(), bufferType.getAffineMaps(),
         bufferType.getMemorySpace());
   // Create the placeholder op for the backing buffer. Make sure shape

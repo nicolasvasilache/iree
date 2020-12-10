@@ -35,6 +35,9 @@ struct LinalgTileAndDistributeOnTensorsPass
                     scf::SCFDialect>();
   }
   LinalgTileAndDistributeOnTensorsPass() = default;
+  LinalgTileAndDistributeOnTensorsPass(ArrayRef<int64_t> sizes) {
+    this->tileSizes = sizes;
+  };
   LinalgTileAndDistributeOnTensorsPass(
       const LinalgTileAndDistributeOnTensorsPass &pass) {}
   void runOnOperation() override;
@@ -68,7 +71,8 @@ struct TileAndDistributeOnTensorsPattern
 };
 
 void LinalgTileAndDistributeOnTensorsPass::runOnOperation() {
-  if (tileSizes.empty()) return;
+  if (tileSizes.empty())
+    return;
   ModuleOp module = getOperation();
   MLIRContext *context = module->getContext();
 
@@ -118,8 +122,8 @@ void LinalgTileAndDistributeOnTensorsPass::runOnOperation() {
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
-createLinalgTileAndDistributeOnTensorsPass() {
-  return std::make_unique<LinalgTileAndDistributeOnTensorsPass>();
+createLinalgTileAndDistributeOnTensorsPass(ArrayRef<int64_t> sizes) {
+  return std::make_unique<LinalgTileAndDistributeOnTensorsPass>(sizes);
 }
 
 static PassRegistration<LinalgTileAndDistributeOnTensorsPass> pass(

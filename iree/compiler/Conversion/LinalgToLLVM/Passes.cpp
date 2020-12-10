@@ -20,6 +20,7 @@
 #include "iree/compiler/Conversion/LLVMToLLVM/Passes.h"
 #include "iree/compiler/Conversion/LinalgToLLVM/Passes.h"
 #include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
+#include "llvm/Support/CommandLine.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Pass/PassManager.h"
@@ -32,6 +33,11 @@ static llvm::cl::opt<bool> clEnableLinalgOnTensors(
     "iree-llvm-experimental-linalg-on-tensors",
     llvm::cl::desc("Enable the linalg on tensors experimental LLVM path"),
     llvm::cl::init(false));
+
+static llvm::cl::list<int64_t> clLinalgOnTensorsTileSizes(
+    "iree-codegen-llvm-linalg-tile-and-distribute-on-tensors-tile-sizes",
+    llvm::cl::desc("Comma-separated list of tile sizes for tiling on tensors"),
+    llvm::cl::CommaSeparated);
 
 static llvm::cl::opt<bool> convImg2ColConversion(
     "iree-codegen-linalg-to-llvm-conv-img2col-conversion",
@@ -104,12 +110,17 @@ void buildLLVMTransformPassPipeline(OpPassManager &passManager) {
   // HLO -> Linalg on buffers.
   if (clEnableLinalgOnTensors) {
     // TODO: implement and connect these.
-    passManager.addPass(createLinalgTileAndDistributeOnTensorsPass());
+    passManager.addPass(
+        createLinalgTileAndDistributeOnTensorsPass(clLinalgOnTensorsTileSizes));
     passManager.addPass(createLinalgRewriteDestructiveUpdatesPass());
     passManager.addPass(createLinalgLLVMBufferizePass());
     passManager.addNestedPass<FuncOp>(createCanonicalizerPass());
     passManager.addNestedPass<FuncOp>(createCSEPass());
     passManager.addPass(createLegalizeNumWorkgroupsFnPass());
+    passManager.addPass(createCopyRemovalPass());
+    passManager.addPass(createBufferHoistingPass());
+    passManager.addPass(createBufferLoopHoistingPass());
+    passManager.addPass(createPromoteBuffersToStackPass(1 << 10, 64, 10));
   } else {
     passManager.addNestedPass<FuncOp>(createDecomposeHLOClampPass());
     addHLOToLinalgOnBuffersPasses(passManager);

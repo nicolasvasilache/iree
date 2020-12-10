@@ -53,7 +53,10 @@ createLinalgRewriteDestructiveUpdatesPass();
 /// Pass to perform tiling and distribution of Linalg ops with tensor semantics
 /// to sequentialized SPMD loops.
 std::unique_ptr<OperationPass<ModuleOp>>
-createLinalgTileAndDistributeOnTensorsPass();
+createLinalgTileAndDistributeOnTensorsPass(ArrayRef<int64_t> sizes = {});
+
+/// Pass to perform linalg on tensor bufferization.
+std::unique_ptr<OperationPass<FuncOp>> createLinalgLLVMBufferizePass();
 
 /// Pass to perform linalg on tensor bufferization.
 std::unique_ptr<OperationPass<FuncOp>> createLinalgLLVMBufferizePass();
