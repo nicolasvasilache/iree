@@ -120,13 +120,13 @@ jobs:
       - name: Checking tabs
         run: ./scripts/check_tabs.sh "${GITHUB_BASE_REF?}"
 
-  yamllint:
-    runs-on: ubuntu-18.04
-    steps:
-      - name: Checking out repository
-        uses: actions/checkout@v2
-      - name: Fetching Base Branch
-        # We have to explicitly fetch the base branch as well
-        run: git fetch --no-tags --prune --depth=1 origin "${GITHUB_BASE_REF?}:${GITHUB_BASE_REF?}"
-      - name: yamllint
-        run: ./scripts/run_yamllint.sh "${GITHUB_BASE_REF?}"
+  # yamllint:
+  #   runs-on: ubuntu-18.04
+  #   steps:
+  #     - name: Checking out repository
+  #       uses: actions/checkout@v2
+  #     - name: Fetching Base Branch
+  #       # We have to explicitly fetch the base branch as well
+  #       run: git fetch --no-tags --prune --depth=1 origin "${GITHUB_BASE_REF?}:${GITHUB_BASE_REF?}"
+  #     - name: yamllint
+  #       run: ./scripts/run_yamllint.sh "${GITHUB_BASE_REF?}"
