@@ -1,0 +1,84 @@
+name: Build and Test IREE Dialects
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Standalone Build and Test IREE Dialects (Release Asserts)
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+
+      - name: Checkout project
+        uses: actions/checkout@v2
+        with:
+          path: iree
+
+      # Note that actions/checkout is faster than a general purpose submodule
+      # fetch (by a lot), so we get the commit hash and check it out ourselves.
+      - name: Get LLVM Commit Hash
+        id: get_llvm_commit_hash
+        run: |
+          echo "LLVM_COMMIT=$(cd ${GITHUB_WORKSPACE}/iree/ && git ls-files -s third_party/llvm-project | awk '{print $2}')"
+          echo "LLVM_COMMIT=$(cd ${GITHUB_WORKSPACE}/iree/ && git ls-files -s third_party/llvm-project | awk '{print $2}')" >> $GITHUB_ENV
+      - name: Checkout llvm-project
+        uses: actions/checkout@v2
+        with:
+          # Relative path under $GITHUB_WORKSPACE to place the repository
+          path: iree/third_party/llvm-project
+          repository: google/iree-llvm-fork
+          ref: ${{ env.LLVM_COMMIT }}
+      # - name: Checkout LLVM
+      #   run: |
+      #     cd ${GITHUB_WORKSPACE}/iree
+      #     git submodule update --init --recursive third_party/llvm-project
+
+      - name: Ccache for C++ compilation
+        uses: hendrikmuhs/ccache-action@4687d037e4d7cf725512d9b819137a3af34d39b3
+        with:
+          key: ${{ runner.os }}-buildtestasserts
+          # LLVM needs serious cache size
+          max-size: 6G
+
+      - name: Python requirements
+        run: |
+          cd ${GITHUB_WORKSPACE}/iree/
+          which python
+          python -m venv ~/.venv/mlirdev
+          source ~/.venv/mlirdev/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -r ${GITHUB_WORKSPACE}/iree/bindings/python/build_requirements.txt
+          python -m pip install -r ${GITHUB_WORKSPACE}/iree/third_party/llvm-project/mlir/python/requirements.txt
+
+      # TODO: enable LLD.
+      - name: Build and Test
+        run: |
+          source ~/.venv/mlirdev/bin/activate
+          cmake -B${GITHUB_WORKSPACE}/iree/build \
+            -S${GITHUB_WORKSPACE}/iree/third_party/llvm-project/llvm \
+            -DLLVM_EXTERNAL_PROJECTS=iree-dialects \
+            -DLLVM_EXTERNAL_IREE_DIALECTS_SOURCE_DIR=${GITHUB_WORKSPACE}/iree/llvm-external-projects/iree-dialects \
+            -DLLVM_ENABLE_LLD=OFF \
+            -DLLVM_CCACHE_BUILD=ON \
+            -DLLVM_ENABLE_PROJECTS="mlir" \
+            -DLLVM_TARGETS_TO_BUILD="X86" \
+            -DMLIR_INCLUDE_INTEGRATION_TESTS=ON \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_INCLUDE_UTILS=ON \
+            -DLLVM_INSTALL_UTILS=ON \
+            -DLLVM_BUILD_EXAMPLES=ON \
+            -DIREE_BUILD_PYTHON_BINDINGS=ON \
+            -DPython3_EXECUTABLE=$(which python) \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+          cmake --build ${GITHUB_WORKSPACE}/iree/build -t check-iree-dialects
+          ccache -s
