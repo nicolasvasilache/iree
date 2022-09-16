@@ -209,6 +209,8 @@ if(IREE_BUILD_COMPILER)
     SRCS
       "iree-opt-main.cc"
     DEPS
+
+    TPPLinalgXDialect
       LLVMSupport
       MLIRIR
       MLIROptLib
