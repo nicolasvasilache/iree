@@ -22,8 +22,15 @@
 #include "mlir/Dialect/Arithmetic/Utils/Utils.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/Transform/IR/TransformInterfaces.h"
 #include "mlir/Pass/PassManager.h"
+
+// TODO: TPP_INTEGRATION
+// Should be tpp/ but OTOH we graduate by either upstreaming ops or
+// passing through LinalgExt, so this is really a temporary crutch that
+// won't land in IREE.
+#include "Standalone/Transforms.h"
 
 using namespace mlir;
 using namespace mlir::iree_compiler;
@@ -73,14 +80,26 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
   RewritePatternSet patterns(ctx);
   if (getCanonicalization()) addAllRegisteredCanonicalizationPatterns(patterns);
   if (getRankReducing()) addRankReducingPatterns(patterns);
+  if (getSimplifyMemrefMetadata())
+    memref::populateSimplifyExtractStridedMetadataOpPatterns(patterns);
+  if (getLinalgToTpp()) tpp::populateLinalgToTppPatterns(patterns);
+  if (getTppToXsmm()) tpp::populateTppToXsmmPatterns(patterns);
+  if (getXsmmToFunc())
+    tpp::populateXsmmToFuncPatterns(patterns, /*useExtractMetaData=*/true);
 
   TrackingListener listener(state);
   GreedyRewriteConfig config;
   LogicalResult result = applyPatternsAndFoldGreedily(
       target, std::move(patterns), config, &listener);
   LogicalResult listenerResult = listener.checkErrorState();
-  if (failed(result) || failed(listenerResult))
+  if (failed(result)) {
+    target->emitOpError("patterns failed to apply");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
+  if (failed(listenerResult)) {
+    target->emitOpError("listener failed");
+    return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
   results.assign({target});
   return DiagnosedSilenceableFailure(success());
 }
