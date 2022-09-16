@@ -31,6 +31,12 @@
 #include "iree/compiler/Modules/HAL/Loader/IR/HALLoaderDialect.h"
 #include "mlir/IR/Dialect.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/Mathx/MathxDialect.h"
+#include "TPP/Dialect/Tpp/TppDialect.h"
+#include "TPP/Dialect/Xsmm/XsmmDialect.h"
+
 namespace mlir {
 namespace iree_compiler {
 
@@ -44,6 +50,9 @@ inline void registerIreeDialects(DialectRegistry &registry) {
                   IREE::HAL::Loader::HALLoaderDialect,
                   IREE::LinalgExt::IREELinalgExtDialect,
                   mlir::linalg::transform::LinalgTransformDialect,
+                  mlir::linalgx::LinalgXDialect,
+                  mlir::tpp::TppDialect,
+                  mlir::xsmm::XsmmDialect,
                   IREE::Stream::StreamDialect,
                   IREE::Util::UtilDialect,
                   IREE::VM::VMDialect,

@@ -27,6 +27,11 @@
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LLVM.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/Tpp/TppDialect.h"
+#include "TPP/Dialect/Xsmm/XsmmDialect.h"
+
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {

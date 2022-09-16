@@ -27,6 +27,9 @@
 #include "mlir/Dialect/Transform/IR/TransformInterfaces.h"
 #include "mlir/Pass/PassManager.h"
 
+// TPP_INTEGRATION
+#include "TPP/Transforms.h"
+
 using namespace mlir;
 using namespace mlir::iree_compiler;
 using namespace mlir::iree_compiler::IREE;
@@ -76,11 +79,11 @@ static void addRankReducingPatterns(RewritePatternSet &patterns) {
 }
 
 static void addSwappingPatterns(RewritePatternSet &patterns,
-                                bool swapPaddingElideCornerCase) {
+                                bool swapPaddingElideConditional) {
   patterns.add<linalg::ExtractSliceOfPadTensorSwapPattern>(
       patterns.getContext(),
       [&](tensor::ExtractSliceOp) -> llvm::Optional<bool> {
-        return !swapPaddingElideCornerCase;
+        return swapPaddingElideConditional;
       });
 }
 
@@ -116,13 +119,25 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
     addSwappingPatterns(patterns, getSwapPaddingElideConditional());
   if (getAdditionalIreePatterns()) addAdditionalIreePatterns(patterns);
 
+  // TPP patterns.
+  if (getLinalgToTpp()) tpp::populateLinalgToTppPatterns(patterns);
+  if (getTppToXsmm()) tpp::populateTppToXsmmPatterns(patterns);
+  if (getXsmmToFunc())
+    tpp::populateXsmmToFuncPatterns(patterns, /*useExtractMetaData=*/true);
+
   TrackingListener listener(state);
   GreedyRewriteConfig config;
   LogicalResult result = applyPatternsAndFoldGreedily(
       target, std::move(patterns), config, &listener);
   LogicalResult listenerResult = listener.checkErrorState();
-  if (failed(result) || failed(listenerResult))
+  if (failed(result)) {
+    target->emitOpError("patterns failed to apply");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
+  if (failed(listenerResult)) {
+    target->emitOpError("listener failed");
+    return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
   results.assign({target});
   return DiagnosedSilenceableFailure(success());
 }

@@ -35,6 +35,11 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/Tpp/TppDialect.h"
+#include "TPP/Dialect/Xsmm/XsmmDialect.h"
+
 #define DEBUG_TYPE "iree-llvm-cpu-target"
 
 namespace mlir {
@@ -130,6 +135,9 @@ class LLVMCPUTargetBackend final : public TargetBackend {
                     IREE::LinalgExt::IREELinalgExtDialect,
                     linalg::transform::LinalgTransformDialect,
                     mlir::transform::TransformDialect,
+                    mlir::linalgx::LinalgXDialect,
+                    mlir::tpp::TppDialect,
+                    mlir::xsmm::XsmmDialect,
                     pdl::PDLDialect,
                     pdl_interp::PDLInterpDialect,
                     arm_neon::ArmNeonDialect>();

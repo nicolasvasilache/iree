@@ -45,6 +45,11 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/Tpp/TppDialect.h"
+#include "TPP/Dialect/Xsmm/XsmmDialect.h"
+
 #define DEBUG_TYPE "iree-transform-dialect-interpreter"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
 
@@ -75,12 +80,15 @@ class TransformDialectInterpreterPass
                     gpu::GPUDialect,
                     linalg::LinalgDialect,
                     linalg::transform::LinalgTransformDialect,
+                    linalgx::LinalgXDialect,
                     LLVM::LLVMDialect,
                     pdl::PDLDialect,
                     pdl_interp::PDLInterpDialect,
                     scf::SCFDialect,
                     tensor::TensorDialect,
+                    tpp::TppDialect,
                     transform::TransformDialect,
+                    xsmm::XsmmDialect,
                     vector::VectorDialect
         // clang-format on
         >();

@@ -25,6 +25,9 @@
 #include "mlir/Dialect/Vector/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Support/LLVM.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/BufferizableOpInterfaceImpl.h"
+
 using mlir::bufferization::AnalysisState;
 using mlir::bufferization::BufferizableOpInterface;
 using mlir::bufferization::BufferizationAliasInfo;
@@ -410,6 +413,7 @@ void registerBufferizationInterfaces(DialectRegistry &registry) {
       registry);
   tensor::registerBufferizableOpInterfaceExternalModels(registry);
   vector::registerBufferizableOpInterfaceExternalModels(registry);
+  linalgx::registerBufferizableOpInterfaceExternalModels(registry);
 
   // Register IREE operations.
   registry.addExtension(

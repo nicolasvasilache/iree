@@ -13,6 +13,10 @@
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/LinalgX/LinalgXOps.h"
+
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {

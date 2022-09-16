@@ -23,6 +23,10 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 
+// TPP_INTEGRATION
+#include "TPP/Dialect/LinalgX/LinalgXDialect.h"
+#include "TPP/Dialect/Tpp/TppDialect.h"
+#include "TPP/Dialect/Xsmm/XsmmDialect.h"
 namespace mlir {
 namespace iree_compiler {
 
@@ -47,13 +51,16 @@ class LLVMCPULowerExecutableTargetPass
                     bufferization::BufferizationDialect,
                     linalg::LinalgDialect,
                     linalg::transform::LinalgTransformDialect,
+                    linalgx::LinalgXDialect,
                     LLVM::LLVMDialect,
                     pdl::PDLDialect,
                     pdl_interp::PDLInterpDialect,
                     scf::SCFDialect,
                     tensor::TensorDialect,
+                    tpp::TppDialect,
                     transform::TransformDialect,
-                    vector::VectorDialect>();
+                    vector::VectorDialect,
+                    xsmm::XsmmDialect>();
     // clang-format on
   }
 
