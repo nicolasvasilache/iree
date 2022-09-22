@@ -79,7 +79,8 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
     memref::populateSimplifyExtractStridedMetadataOpPatterns(patterns);
   if (getLinalgToTpp()) tpp::populateLinalgToTppPatterns(patterns);
   if (getTppToXsmm()) tpp::populateTppToXsmmPatterns(patterns);
-  if (getXsmmToFunc()) tpp::populateXsmmToFuncPatterns(patterns);
+  if (getXsmmToFunc())
+    tpp::populateXsmmToFuncPatterns(patterns, /*useExtractMetaData=*/true);
 
   TrackingListener listener(state);
   GreedyRewriteConfig config;

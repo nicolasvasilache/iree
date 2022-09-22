@@ -9,7 +9,7 @@ transform.sequence failures(propagate) {
 
     %func_2 = transform.structured.match ops{["func.func"]} in %variant_op_2
     // %func_2 = transform.iree.foreach_thread_to_workgroup %func
-    %func_3 = transform.iree.apply_patterns %func_2 { linalg_to_tpp }
-    %func_4 = transform.iree.apply_patterns %func_3 { tpp_to_xsmm }
-    transform.iree.apply_patterns %func_4 { xsmm_to_func }
+    %func_3 = transform.iree.apply_patterns %func_2 
+      { linalg_to_tpp, tpp_to_xsmm, xsmm_to_func }
+    %func_4 = transform.iree.apply_patterns %func_3 { simplify_memref_metadata }
 }
