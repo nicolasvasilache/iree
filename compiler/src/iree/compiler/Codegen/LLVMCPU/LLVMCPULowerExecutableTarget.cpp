@@ -4,6 +4,9 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+#include "Standalone/Dialect/LinalgX/LinalgXDialect.h"
+#include "Standalone/Dialect/Tpp/TppDialect.h"
+#include "Standalone/Dialect/Xsmm/XsmmDialect.h"
 #include "iree-dialects/Dialect/LinalgExt/IR/LinalgExtDialect.h"
 #include "iree-dialects/Dialect/LinalgTransform/LinalgTransformOps.h"
 #include "iree/compiler/Codegen/Dialect/IREECodegenDialect.h"
@@ -47,13 +50,16 @@ class LLVMCPULowerExecutableTargetPass
                     bufferization::BufferizationDialect,
                     linalg::LinalgDialect,
                     linalg::transform::LinalgTransformDialect,
+                    linalgx::LinalgXDialect,
                     LLVM::LLVMDialect,
                     pdl::PDLDialect,
                     pdl_interp::PDLInterpDialect,
                     scf::SCFDialect,
                     tensor::TensorDialect,
+                    tpp::TppDialect,
                     transform::TransformDialect,
-                    vector::VectorDialect>();
+                    vector::VectorDialect,
+                    xsmm::XsmmDialect>();
     // clang-format on
   }
 
