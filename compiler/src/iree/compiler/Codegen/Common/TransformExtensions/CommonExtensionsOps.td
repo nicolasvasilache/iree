@@ -34,6 +34,9 @@ def ApplyPatternsOp : Op<Transform_Dialect, "iree.apply_patterns",
       registered dialects and ops.
       - rank_reducing: adds patterns that results in rank-reducing behavior on
       subset-based operations.
+      - simplify_memref_metadata: adds patterns that simplify the uses of
+      memref.extract_strided_metadata and fold to the underlying indices.
+      # Experimental TPP patterns.
       - linalg_to_tpp: adds patterns that lower linalg ops to tpp.
       - tpp_to_xsmm: adds patterns that lower tpp to xsmm.
       - xsmm_to_func: adds patterns that lower xsmm to func calls.
@@ -54,6 +57,7 @@ def ApplyPatternsOp : Op<Transform_Dialect, "iree.apply_patterns",
   let arguments = (ins PDL_Operation:$target,
                        UnitAttr:$canonicalization,
                        UnitAttr:$rank_reducing,
+                       UnitAttr:$simplify_memref_metadata,
                        UnitAttr:$linalg_to_tpp,
                        UnitAttr:$tpp_to_xsmm,
                        UnitAttr:$xsmm_to_func);

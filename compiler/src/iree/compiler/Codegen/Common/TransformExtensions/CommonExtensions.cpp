@@ -23,6 +23,7 @@
 #include "mlir/Dialect/Arithmetic/Utils/Utils.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/Transform/IR/TransformInterfaces.h"
 #include "mlir/Pass/PassManager.h"
 
@@ -74,6 +75,8 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
   RewritePatternSet patterns(ctx);
   if (getCanonicalization()) addAllRegisteredCanonicalizationPatterns(patterns);
   if (getRankReducing()) addRankReducingPatterns(patterns);
+  if (getSimplifyMemrefMetadata())
+    memref::populateSimplifyExtractStridedMetadataOpPatterns(patterns);
   if (getLinalgToTpp()) tpp::populateLinalgToTppPatterns(patterns);
   if (getTppToXsmm()) tpp::populateTppToXsmmPatterns(patterns);
   if (getXsmmToFunc()) tpp::populateXsmmToFuncPatterns(patterns);
