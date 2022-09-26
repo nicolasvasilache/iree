@@ -87,6 +87,10 @@ iree_cc_library(
   SRCS
     "context_util.c"
   DEPS
+    # TODO: this does not link properly when building iree-run-module.
+    # ${IREE_HAL_EXECUTABLE_LOADER_EXTRA_DEPS}
+    standalone_c_runner_utils
+
     ::device_util
     iree::base
     iree::base::internal::file_io

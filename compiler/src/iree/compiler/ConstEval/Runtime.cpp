@@ -11,6 +11,16 @@
 #include "iree/modules/hal/module.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "runtime/src/iree/hal/local/executable_loader.h"
+
+extern "C" {
+// TODO: This is a temporary workaround.
+iree_hal_executable_import_provider_t iree_hal_test_import_provider(void) {
+  abort();
+  iree_hal_executable_import_provider_t provider = {0};
+  return provider;
+}
+}
 
 namespace mlir {
 namespace iree_compiler {
