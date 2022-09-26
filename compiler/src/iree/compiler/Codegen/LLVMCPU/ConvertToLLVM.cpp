@@ -11,6 +11,7 @@
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/Util/IR/UtilDialect.h"
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -42,6 +43,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Math/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -864,6 +866,37 @@ class ConvertHALInterfaceBindingSubspanOp : public ConvertToLLVMPattern {
   }
 };
 
+/// Rewrites memref.extract_strided_metadata
+class ConvertExtractBaseBufferPointer : public ConvertToLLVMPattern {
+ public:
+  explicit ConvertExtractBaseBufferPointer(MLIRContext *context,
+                                           LLVMTypeConverter &converter)
+      : ConvertToLLVMPattern(
+            memref::ExtractBaseBufferPointerOp::getOperationName(), context,
+            converter) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const override {
+    auto extractOp = cast<memref::ExtractBaseBufferPointerOp>(op);
+    auto bindingOp = extractOp.getSource()
+                         .getDefiningOp<IREE::HAL::InterfaceBindingSubspanOp>();
+    if (!bindingOp) return failure();
+
+    auto llvmFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!llvmFuncOp) return failure();
+
+    HALDispatchABI abi(llvmFuncOp, getTypeConverter());
+
+    // Replace all uses of 0-D memref with ptr.
+    Value baseMemrefPtr = abi.loadBindingPtr(
+        op->getLoc(), bindingOp.getBinding().getSExtValue(), rewriter);
+    rewriter.replaceOpWithNewOp<LLVM::PtrToIntOp>(
+        op, getTypeConverter()->getIndexType(), baseMemrefPtr);
+    return success();
+  }
+};
+
 class ConvertToLLVMPass : public ConvertToLLVMBase<ConvertToLLVMPass> {
  public:
   ConvertToLLVMPass() = default;
@@ -988,6 +1021,7 @@ void ConvertToLLVMPass::runOnOperation() {
 
   // clang-format off
   patterns.insert<
+    ConvertExtractBaseBufferPointer,
     ConvertHALEntryPointFuncOp,
     ConvertHALInterfaceWorkgroupIDOp,
     ConvertHALInterfaceWorkgroupSizeOp,
