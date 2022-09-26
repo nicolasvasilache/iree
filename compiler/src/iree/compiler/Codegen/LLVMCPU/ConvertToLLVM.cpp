@@ -13,7 +13,6 @@
 #include "iree/compiler/Dialect/Util/IR/UtilOps.h"
 #include "llvm/ADT/Triple.h"
 #include "llvm/Support/Mutex.h"
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
 #include "mlir/Conversion/ArithmeticToLLVM/ArithmeticToLLVM.h"
@@ -42,6 +41,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Math/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -557,6 +557,68 @@ class HALDispatchABI {
     return callOp.getResult();
   }
 
+  // Emits a call to the import with the given |importOrdinal|.
+  // The provided |resultTypes| and |params| are packed in a struct and transit
+  // through memory so that we can expose a single void* argument.
+  // Returns 0 on success and non-zero otherwise.
+  SmallVector<Value> wrapAndCallImport(Location loc, unsigned importOrdinal,
+                                       TypeRange resultTypes, ValueRange params,
+                                       OpBuilder &builder) {
+    auto thunkPtrValue =
+        loadFieldValue(loc, EnvironmentField::import_thunk, builder);
+    auto importPtrValue = loadImportFuncPtr(loc, importOrdinal, builder);
+
+    SmallVector<Type> types(resultTypes);
+    types.reserve(resultTypes.size() + params.size());
+    for (Value p : params)
+      types.push_back(typeConverter->convertType(p.getType()));
+
+    Type structType;
+    Value paramsPtr, voidPtr;
+    auto voidPtrTy = LLVM::LLVMPointerType::get(
+        IntegerType::get(builder.getContext(), /*width=*/8));
+    if (!types.empty()) {
+      structType =
+          LLVM::LLVMStructType::getLiteral(builder.getContext(), types);
+      auto ptrStructType = LLVM::LLVMPointerType::get(structType);
+      Value one = builder.create<LLVM::ConstantOp>(loc, builder.getI64Type(),
+                                                   builder.getIndexAttr(1));
+      // TODO: something better than alloca to avoid blowing up the stack.
+      paramsPtr = builder.create<LLVM::AllocaOp>(loc, ptrStructType, one,
+                                                 /*alignment=*/0);
+      Value structVal = builder.create<LLVM::UndefOp>(loc, structType);
+      for (int64_t i = 0, e = params.size(); i < e; ++i)
+        structVal = builder.create<LLVM::InsertValueOp>(
+            loc, structVal, params[i], i + resultTypes.size());
+      // Store into the alloca'ed descriptor.
+      builder.create<LLVM::StoreOp>(loc, structVal, paramsPtr);
+      voidPtr = builder.create<LLVM::BitcastOp>(loc, voidPtrTy, paramsPtr);
+    } else {
+      voidPtr = builder.create<LLVM::UndefOp>(loc, voidPtrTy);
+    }
+    // TODO: assert success.
+    auto callOp =
+        builder.create<LLVM::CallOp>(loc, TypeRange{builder.getI32Type()},
+                                     ValueRange{
+                                         /*thunk_func_ptr=*/thunkPtrValue,
+                                         /*import_func_ptr=*/importPtrValue,
+                                         /*import_params=*/voidPtr,
+                                     });
+    callOp->setAttr("__hal_dispatch_abi_import_converted__",
+                    builder.getUnitAttr());
+    if (resultTypes.empty()) return {};
+
+    SmallVector<Value> results;
+    results.reserve(resultTypes.size());
+    Value structVal = builder.create<LLVM::LoadOp>(loc, structType, paramsPtr);
+    for (int64_t i = 0, e = resultTypes.size(); i < e; ++i) {
+      results.push_back(
+          builder.create<LLVM::ExtractValueOp>(loc, structVal, i));
+    }
+
+    return results;
+  }
+
  private:
   Value getIndexValue(Location loc, int64_t value, OpBuilder &builder) {
     return builder.createOrFold<LLVM::ConstantOp>(
@@ -864,6 +926,81 @@ class ConvertHALInterfaceBindingSubspanOp : public ConvertToLLVMPattern {
   }
 };
 
+/// Rewrites memref.extract_strided_metadata
+class ConvertExtractAlignedPointerAsIndex : public ConvertToLLVMPattern {
+ public:
+  explicit ConvertExtractAlignedPointerAsIndex(MLIRContext *context,
+                                               LLVMTypeConverter &converter)
+      : ConvertToLLVMPattern(
+            memref::ExtractAlignedPointerAsIndexOp::getOperationName(), context,
+            converter) {}
+
+  LogicalResult matchAndRewrite(
+      Operation *op, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const override {
+    auto extractOp = cast<memref::ExtractAlignedPointerAsIndexOp>(op);
+    auto bindingOp = extractOp.getSource()
+                         .getDefiningOp<IREE::HAL::InterfaceBindingSubspanOp>();
+    if (!bindingOp) return failure();
+
+    auto llvmFuncOp = op->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!llvmFuncOp) return failure();
+
+    HALDispatchABI abi(llvmFuncOp, getTypeConverter());
+
+    // Replace all uses of 0-D memref with ptr.
+    Value baseMemrefPtr = abi.loadBindingPtr(
+        op->getLoc(), bindingOp.getBinding().getSExtValue(), rewriter);
+    rewriter.replaceOpWithNewOp<LLVM::PtrToIntOp>(
+        op, getTypeConverter()->getIndexType(), baseMemrefPtr);
+    return success();
+  }
+};
+
+/// Rewrites 0-result CallOp to known imported library using
+/// HALDispatchABI wrapAndCallImport.
+/// The parent LLVMFuncOp must be compatible with HALDispatchABI.
+///
+/// Note: this is an LLVM::CallOp -> LLVM::CallOp rewrite that is introduced
+/// after all conversions are done. Importantly, this is not a conversion
+/// pattern.
+class RewriteCallOpToImportedCallOp : public OpRewritePattern<LLVM::CallOp> {
+ public:
+  explicit RewriteCallOpToImportedCallOp(MLIRContext *context,
+                                         LLVMTypeConverter &converter)
+      : OpRewritePattern<LLVM::CallOp>(context), typeConverter(converter) {}
+
+  LogicalResult matchAndRewrite(LLVM::CallOp callOp,
+                                PatternRewriter &rewriter) const override {
+    auto llvmFuncOp = callOp->getParentOfType<LLVM::LLVMFuncOp>();
+    if (!llvmFuncOp) return failure();
+    // Single llvm.ptr<i8>
+    if (callOp->getAttr("__hal_dispatch_abi_import_converted__"))
+      return failure();
+
+    HALDispatchABI abi(llvmFuncOp, &typeConverter);
+    auto symbol = callOp.getCallableForCallee().dyn_cast<SymbolRefAttr>();
+    auto flatSymbol = symbol.dyn_cast_or_null<FlatSymbolRefAttr>();
+    if (!flatSymbol) return failure();
+
+    // TODO: get ordinal from ABI.
+    llvm::Optional<int> ordinal;
+    if (flatSymbol.getValue() == "xsmm_brgemm_dispatch_f32")
+      ordinal = 0;
+    else if (flatSymbol.getValue() == "xsmm_brgemm_invoke_f32")
+      ordinal = 1;
+    if (!ordinal) return failure();
+    SmallVector<Value> results = abi.wrapAndCallImport(
+        callOp->getLoc(), *ordinal, callOp->getResultTypes(),
+        callOp->getOperands(), rewriter);
+    rewriter.replaceOp(callOp, results);
+    return success();
+  }
+
+ private:
+  LLVMTypeConverter &typeConverter;
+};
+
 class ConvertToLLVMPass : public ConvertToLLVMBase<ConvertToLLVMPass> {
  public:
   ConvertToLLVMPass() = default;
@@ -988,6 +1125,7 @@ void ConvertToLLVMPass::runOnOperation() {
 
   // clang-format off
   patterns.insert<
+    ConvertExtractAlignedPointerAsIndex,
     ConvertHALEntryPointFuncOp,
     ConvertHALInterfaceWorkgroupIDOp,
     ConvertHALInterfaceWorkgroupSizeOp,
@@ -1007,6 +1145,14 @@ void ConvertToLLVMPass::runOnOperation() {
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     signalPassFailure();
     return;
+  }
+
+  // Rewrite Calls to imported library functions.
+  {
+    RewritePatternSet patterns(&getContext());
+    patterns.insert<RewriteCallOpToImportedCallOp>(&getContext(), converter);
+    if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns))))
+      return signalPassFailure();
   }
 
   // Post conversion patterns.
