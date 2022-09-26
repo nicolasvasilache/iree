@@ -85,6 +85,8 @@ iree_cc_binary(
   SRCS
     "iree-check-module-main.cc"
   DEPS
+    xsmm
+
     iree::base
     iree::base::cc
     iree::base::core_headers
@@ -107,6 +109,8 @@ iree_cc_binary(
   SRCS
     "iree-dump-module-main.c"
   DEPS
+    xsmm
+
     flatcc::runtime
     iree::base
     iree::base::internal::file_io
@@ -121,8 +125,10 @@ iree_cc_binary(
   SRCS
     "iree-run-module-main.cc"
   DEPS
+    xsmm
+
     iree::base
-    iree::base::cc
+    iree::base::cc 
     iree::base::internal::flags
     iree::base::tracing
     iree::hal

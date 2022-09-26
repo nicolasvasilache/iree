@@ -87,8 +87,14 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
   LogicalResult result = applyPatternsAndFoldGreedily(
       target, std::move(patterns), config, &listener);
   LogicalResult listenerResult = listener.checkErrorState();
-  if (failed(result) || failed(listenerResult))
+  if (failed(result)) {
+    target->emitOpError("patterns failed to apply");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
+  if (failed(listenerResult)) {
+    target->emitOpError("listener failed");
+    return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
+  }
   results.assign({target});
   return DiagnosedSilenceableFailure(success());
 }

@@ -37,6 +37,8 @@
 // passing through LinalgExt, so this is really a temporary crutch that
 // won't land in IREE.
 #include "Standalone/Dialect/LinalgX/LinalgXDialect.h"
+#include "Standalone/Dialect/Tpp/TppDialect.h"
+#include "Standalone/Dialect/Xsmm/XsmmDialect.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -52,6 +54,8 @@ inline void registerIreeDialects(DialectRegistry &registry) {
                   IREE::LinalgExt::IREELinalgExtDialect,
                   mlir::linalg::transform::LinalgTransformDialect,
                   mlir::linalgx::LinalgXDialect,
+                  mlir::tpp::TppDialect,
+                  mlir::xsmm::XsmmDialect,
                   IREE::Stream::StreamDialect,
                   IREE::Util::UtilDialect,
                   IREE::VM::VMDialect,
