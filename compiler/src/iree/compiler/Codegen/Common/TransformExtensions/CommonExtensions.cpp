@@ -109,6 +109,7 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
         "patterns greedily");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
   }
+
   MLIRContext *ctx = target->getContext();
   RewritePatternSet patterns(ctx);
   if (getCanonicalization()) addAllRegisteredCanonicalizationPatterns(patterns);
@@ -121,9 +122,11 @@ DiagnosedSilenceableFailure transform_dialect::ApplyPatternsOp::applyToOne(
 
   // TPP patterns.
   if (getLinalgToTpp()) {
-    tpp::populateMapLinalgToTppPatterns(patterns);
     tpp::populateConvertLinalgToTppPatterns(patterns);
+    tpp::populateMapLinalgToTppPatterns(patterns);
   }
+  if (getSwappingRelayoutPatterns())
+    tpp::populateSinkRelayoutPatterns(patterns);
   if (getTppToXsmm()) tpp::populateTppToXsmmPatterns(patterns);
   if (getXsmmToFunc())
     tpp::populateXsmmToFuncPatterns(patterns, /*useExtractMetaData=*/true);
@@ -454,6 +457,9 @@ DiagnosedSilenceableFailure
 transform_dialect::ForeachThreadToWorkgroupOp::applyToOne(
     func::FuncOp target, SmallVectorImpl<Operation *> &results,
     transform::TransformState &state) {
+  // Transform returns the target whatever happens, early assign it.
+  results.assign({target});
+
   if (!isa<HAL::ExecutableOp, HAL::ExecutableVariantOp>(state.getTopLevel())) {
     state.getTopLevel()->emitOpError(
         "requires HAL::ExecutableOp or HAL::ExecutableVariantOp toplevel "
@@ -480,18 +486,22 @@ transform_dialect::ForeachThreadToWorkgroupOp::applyToOne(
     return WalkResult::advance();
   });
 
+  // Do not report the lack of a `topLevelForeachThreadOp` as an error, this
+  // allows passing through funcs that do not have an scf.foreach_thread op.
+  if (!topLevelForeachThreadOp) return DiagnosedSilenceableFailure(success());
+
   if (walkResult.wasInterrupted()) {
-    state.getTopLevel()->emitOpError(
-        "could not find a unique topLevel scf.foreach_thread");
+    target->emitOpError("could not find a unique topLevel scf.foreach_thread");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
   }
 
   SimplePatternRewriter rewriter(topLevelForeachThreadOp);
   if (failed(rewriteForeachThreadToWorkgroup(topLevelForeachThreadOp, exportOp,
-                                             rewriter)))
+                                             rewriter))) {
+    target->emitOpError(
+        "could not rewrite topLevel scf.foreach_thread to workgroup");
     return DiagnosedSilenceableFailure(reportUnknownTransformError(target));
-
-  results.assign({target});
+  }
 
   return DiagnosedSilenceableFailure(success());
 }

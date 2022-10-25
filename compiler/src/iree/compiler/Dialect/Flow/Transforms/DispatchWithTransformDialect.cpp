@@ -54,7 +54,11 @@ struct DispatchWithTransformDialect
                     pdl_interp::PDLInterpDialect,
                     scf::SCFDialect,
                     tensor::TensorDialect,
-                    transform::TransformDialect
+                    transform::TransformDialect,
+                    // TPP
+                    linalgx::LinalgXDialect,
+                    tpp::TppDialect,
+                    xsmm::XsmmDialect
     >();
     // clang-format on
   }

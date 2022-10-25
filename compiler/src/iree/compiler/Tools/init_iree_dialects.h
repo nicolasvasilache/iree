@@ -51,6 +51,7 @@ inline void registerIreeDialects(DialectRegistry &registry) {
                   IREE::LinalgExt::IREELinalgExtDialect,
                   mlir::linalg::transform::LinalgTransformDialect,
                   mlir::linalgx::LinalgXDialect,
+                  mlir::mathx::MathxDialect,
                   mlir::tpp::TppDialect,
                   mlir::xsmm::XsmmDialect,
                   IREE::Stream::StreamDialect,

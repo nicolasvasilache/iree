@@ -45,6 +45,50 @@ struct GenericNumericCastExternalModel {
   }
 };
 
+struct LinalgXPackOpTiedOpInterface
+    : public TiedOpInterface::ExternalModel<LinalgXPackOpTiedOpInterface,
+                                            linalgx::PackOp> {
+  Value getTiedResult(Operation *op, unsigned resultIndex) const {
+    auto packOp = cast<linalgx::PackOp>(op);
+    assert(resultIndex == 0 &&
+           "must be a single-input, single-output, single-result op");
+    return IREE::Util::TiedOpInterface::findTiedBaseValue(packOp.getOutput());
+  }
+
+  ::llvm::Optional<unsigned> getTiedResultOperandIndex(
+      Operation *op, unsigned resultIndex) const {
+    assert(resultIndex == 0 &&
+           "must be a single-input, single-output, single-result op");
+    return {1};  // dest
+  }
+
+  SmallVector<int64_t, 4> getTiedResultOperandIndices(Operation *op) const {
+    return SmallVector<int64_t, 4>{1};
+  }
+};
+
+struct LinalgXUnPackOpTiedOpInterface
+    : public TiedOpInterface::ExternalModel<LinalgXUnPackOpTiedOpInterface,
+                                            linalgx::UnPackOp> {
+  Value getTiedResult(Operation *op, unsigned resultIndex) const {
+    auto unpackOp = cast<linalgx::UnPackOp>(op);
+    assert(resultIndex == 0 &&
+           "must be a single-input, single-output, single-result op");
+    return IREE::Util::TiedOpInterface::findTiedBaseValue(unpackOp.getOutput());
+  }
+
+  ::llvm::Optional<unsigned> getTiedResultOperandIndex(
+      Operation *op, unsigned resultIndex) const {
+    assert(resultIndex == 0 &&
+           "must be a single-input, single-output, single-result op");
+    return {1};  // dest
+  }
+
+  SmallVector<int64_t, 4> getTiedResultOperandIndices(Operation *op) const {
+    return SmallVector<int64_t, 4>{1};
+  }
+};
+
 struct InsertSliceOpTiedOpInterface
     : public TiedOpInterface::ExternalModel<InsertSliceOpTiedOpInterface,
                                             tensor::InsertSliceOp> {
@@ -116,11 +160,16 @@ void registerUtilExternalModels(DialectRegistry &registry) {
   registry.addExtension(+[](MLIRContext *ctx, tensor::TensorDialect *dialect) {
     tensor::InsertSliceOp::attachInterface<InsertSliceOpTiedOpInterface>(*ctx);
   });
-
+  registry.addExtension(+[](MLIRContext *ctx,
+                            linalgx::LinalgXDialect *dialect) {
+    linalgx::PackOp::attachInterface<LinalgXPackOpTiedOpInterface>(*ctx);
+    linalgx::UnPackOp::attachInterface<LinalgXUnPackOpTiedOpInterface>(*ctx);
+  });
   registry.addExtension(+[](MLIRContext *ctx, linalg::LinalgDialect *dialect) {
-    // Register all Linalg structured ops. `LinalgOp` is an interface and it is
-    // not possible to attach an external interface to an existing interface.
-    // Therefore, attach the `TiedOpInterface` to all ops one-by-one.
+    // Register all Linalg structured ops. `LinalgOp` is an interface
+    // and it is not possible to attach an external interface to an
+    // existing interface. Therefore, attach the `TiedOpInterface` to
+    // all ops one-by-one.
     LinalgOpTiedOpInterfaceHelper<
 #define GET_OP_LIST
 #include "mlir/Dialect/Linalg/IR/LinalgStructuredOps.cpp.inc"
