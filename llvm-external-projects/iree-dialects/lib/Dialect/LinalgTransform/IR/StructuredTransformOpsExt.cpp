@@ -51,6 +51,7 @@
 #include "mlir/Transforms/InliningUtils.h"
 #include "mlir/Transforms/LoopInvariantCodeMotionUtils.h"
 #include "mlir/Transforms/Passes.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
@@ -447,8 +448,8 @@ void mlir::TrackingListener::notifyOperationReplaced(Operation *op,
     return;
   }
 
-  LLVM_DEBUG(DBGS() << "replacing tracked " << *op << " with " << *replacement
-                    << "\n");
+  LLVM_DEBUG(DBGS() << "replacing tracked @" << op << " : " << *op << " with "
+                    << *replacement << "\n");
   mayFail(replacePayloadOp(op, replacement));
 }
 
@@ -462,7 +463,7 @@ void mlir::TrackingListener::notifyOperationRemoved(Operation *op) {
   if (failed(getTransformState().getHandlesForPayloadOp(op, handles)))
     return;
 
-  LLVM_DEBUG(DBGS() << "removing tracked " << *op << "\n");
+  LLVM_DEBUG(DBGS() << "removing tracked @" << op << " : " << *op << "\n");
   mayFail(replacePayloadOp(op, nullptr));
 }
 
@@ -472,6 +473,7 @@ void mlir::TrackingListener::removeMappings(Operation *op) {
     return;
 
   // Replacing the tracked op with null will stop the tracking.
+  LLVM_DEBUG(DBGS() << "removing mappings @" << op << " : " << *op << "\n");
   mayFail(replacePayloadOp(op, nullptr));
 }
 
@@ -560,12 +562,15 @@ forgetUnnecessaryHandles(transform::TransformState &state,
   // the same operation will are not used after the current transform op. The
   // handle will be erased automatically after the last payload operation is
   // deassociated from it.
+  llvm::SmallDenseSet<Operation *> seen;
   llvm::SmallDenseMap<Value, bool> handlesUsedAfterTransform;
   for (Value operand : transform->getOperands()) {
     if (transform::isHandleConsumed(operand, transform))
       continue;
 
     for (Operation *payload : state.getPayloadOps(operand)) {
+      if (seen.contains(payload))
+        continue;
       SmallVector<Value> allHandles;
       (void)state.getHandlesForPayloadOp(payload, allHandles);
       bool allHandlesUnused = llvm::all_of(allHandles, [&](Value handle) {
@@ -575,8 +580,10 @@ forgetUnnecessaryHandles(transform::TransformState &state,
         }
         return !handlesUsedAfterTransform[handle];
       });
-      if (allHandlesUnused)
+      if (allHandlesUnused) {
         listener->removeMappings(payload);
+        seen.insert(payload);
+      }
     }
   }
 
@@ -584,8 +591,12 @@ forgetUnnecessaryHandles(transform::TransformState &state,
   for (Value result : transform->getResults()) {
     if (!result.getUses().empty())
       continue;
-    for (Operation *payload : state.getPayloadOps(result))
+    for (Operation *payload : state.getPayloadOps(result)) {
+      if (seen.contains(payload))
+        continue;
       listener->removeMappings(payload);
+      seen.insert(payload);
+    }
   }
 }
 
@@ -620,10 +631,14 @@ DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
         for (Operation *target : roots) {
           // Make sure we always check the error state, no boolean
           // short-circuting.
-          LogicalResult result = transform(target, listener);
-          LogicalResult listenerResult = listener.checkErrorState();
-          if (failed(result) || failed(listenerResult))
+          if (failed(transform(target, listener))) {
+            target->emitOpError("Transform application failed.");
             return failure();
+          }
+          if (failed(listener.checkErrorState())) {
+            target->emitOpError("Listener failed.");
+            return failure();
+          }
         }
         return success();
       };
@@ -654,10 +669,15 @@ DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
   };
 
   LLVM_DEBUG(DBGS() << "begin canonicalizing sequence\n");
-  if (failed(checkedListenerTransform(performCSE)))
+  if (failed(checkedListenerTransform(performCSE))) {
+    this->emitOpError("Failed to performCSE beform transform sequence");
     return DiagnosedSilenceableFailure::definiteFailure();
-  if (failed(checkedListenerTransform(performCanonicalization)))
+  }
+  if (failed(checkedListenerTransform(performCanonicalization))) {
+    this->emitOpError(
+        "Failed to performCanonicalization beform transform sequence");
     return DiagnosedSilenceableFailure::definiteFailure();
+  }
 
   // Apply the sequenced ops one by one.
   for (Operation &transform : getBodyBlock()->without_terminator()) {
@@ -665,6 +685,7 @@ DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
     DiagnosedSilenceableFailure result = state.applyTransform(transformOp);
     if (result.isDefiniteFailure()) {
       LLVM_DEBUG(DBGS() << "failed: " << transform << "\n");
+      transform.emitOpError("definitely failed");
       return result;
     }
     if (result.isSilenceableFailure()) {
@@ -677,18 +698,25 @@ DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
     LLVM_DEBUG(DBGS() << "successfully performed: " << transform << "\n");
 
     // Canonicalization may replace payload operations associated with the
-    // transform dialect handles. Post-canonicalize reassociation is fragile and
-    // may fail. To make this less likely, drop any association that are no
-    // longer necessary, i.e., if the operand is no longer used in the sequence
-    // or elsewhere or if the result is never read.
+    // transform dialect handles. Post-canonicalize reassociation is fragile
+    // and may fail. To make this less likely, drop any association that are
+    // no longer necessary, i.e., if the operand is no longer used in the
+    // sequence or elsewhere or if the result is never read.
     forgetUnnecessaryHandles(state, *this, transformOp);
 
-    if (failed(checkedListenerTransform(performCSE)))
+    if (failed(checkedListenerTransform(performCSE))) {
+      transform.emitOpError("Failed to performCSE after transform");
       return DiagnosedSilenceableFailure::definiteFailure();
-    if (failed(checkedListenerTransform(performEnabler)))
+    }
+    if (failed(checkedListenerTransform(performEnabler))) {
+      transform.emitOpError("Failed to performEnabler after transform");
       return DiagnosedSilenceableFailure::definiteFailure();
-    if (failed(checkedListenerTransform(performCanonicalization)))
+    }
+    if (failed(checkedListenerTransform(performCanonicalization))) {
+      transform.emitOpError(
+          "Failed to performCanonicalization after transform");
       return DiagnosedSilenceableFailure::definiteFailure();
+    }
   }
 
   // Forward the operation mapping for values yielded from the sequence to the
@@ -705,10 +733,11 @@ DiagnosedSilenceableFailure transform_ext::CanonicalizedSequenceOp::apply(
   return DiagnosedSilenceableFailure::success();
 }
 
-/// Returns `true` if the given op operand may be consuming the handle value in
-/// the Transform IR. That is, if it may have a Free effect on it.
+/// Returns `true` if the given op operand may be consuming the handle value
+/// in the Transform IR. That is, if it may have a Free effect on it.
 static bool isValueUsePotentialConsumer(OpOperand &use) {
-  // Conservatively assume the effect being present in absence of the interface.
+  // Conservatively assume the effect being present in absence of the
+  // interface.
   auto memEffectInterface = dyn_cast<MemoryEffectOpInterface>(use.getOwner());
   if (!memEffectInterface)
     return true;
@@ -804,8 +833,8 @@ void transform_ext::CanonicalizedSequenceOp::getEffects(
     for (Operation &op : *getBodyBlock()) {
       auto iface = dyn_cast<MemoryEffectOpInterface>(&op);
       if (!iface) {
-        // TODO: fill all possible effects; or require ops to actually implement
-        // the memory effect interface always
+        // TODO: fill all possible effects; or require ops to actually
+        // implement the memory effect interface always
         assert(false);
       }
 
@@ -959,8 +988,8 @@ transform_ext::LowerToLLVMOp::apply(mlir::transform::TransformResults &result,
 // LowerVectorsOp
 //===---------------------------------------------------------------------===//
 
-/// Returns true of the numbered vector lowering stage is included into the list
-/// of stages specified on the given lowerVectors operation.
+/// Returns true of the numbered vector lowering stage is included into the
+/// list of stages specified on the given lowerVectors operation.
 static bool stageIncluded(int stage,
                           transform_ext::LowerVectorsOp lowerVectorsOp) {
   for (auto s : lowerVectorsOp.getStages().getAsValueRange<IntegerAttr>()) {
@@ -998,7 +1027,8 @@ transform_ext::LowerVectorsOp::apply(mlir::transform::TransformResults &results,
           .Case("dot", vector::VectorContractLowering::Dot)
           .Case("outerproduct", vector::VectorContractLowering::OuterProduct)
           .Default(vector::VectorContractLowering::OuterProduct);
-  // TODO: fix the annoying name mismatch (vector-transfers vs vector-transfer).
+  // TODO: fix the annoying name mismatch (vector-transfers vs
+  // vector-transfer).
   vector::VectorTransferSplit vectorTransferSplit =
       llvm::StringSwitch<vector::VectorTransferSplit>(getSplitTransfers())
           .Case("none", vector::VectorTransferSplit::None)
@@ -1025,7 +1055,8 @@ transform_ext::LowerVectorsOp::apply(mlir::transform::TransformResults &results,
               .lower4x8xf32(getTransposeAvx2Lowering())
               .lower8x8xf32(getTransposeAvx2Lowering()));
 
-  // TODO: this is copy-pasta from LinalgStrategyLowerVectorsPass, shouldn't be.
+  // TODO: this is copy-pasta from LinalgStrategyLowerVectorsPass, shouldn't
+  // be.
   vector::populateVectorToVectorCanonicalizationPatterns(patterns);
   if (stageIncluded(1, *this)) {
     patterns.add<mlir::vector::ContractionOpToOuterProductOpLowering,
