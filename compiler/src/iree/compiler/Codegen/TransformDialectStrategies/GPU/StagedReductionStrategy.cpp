@@ -115,26 +115,8 @@ void mlir::iree_compiler::gpu::StagedReductionStrategy::configure(
 static void buildStagedReductionStrategyThreadLevel(
     ImplicitLocOpBuilder &b, Value gridReductionH, Value maybeTiledLeadingH,
     Value maybeTiledTrailingH, const StagedReductionStrategy &strategy) {
-  // Map the potential maybeTiledLeadingH.
-  // TODO: Consider fusing leading elementwise into threads.
-  if (strategy.captures.maybeLeadingRank > 0) {
-    int64_t vectorSize =
-        kCudaMaxVectorLoadBitWidth /
-        strategy.captures.maybeLeadingOutputElementalTypeBitWidth;
-    assert((vectorSize & (vectorSize - 1)) == 0 && "size must be power of 2");
-    build1DSplittingStrategyWithOptionalThreadMapping(
-        /*b=*/b,
-        /*opH=*/maybeTiledLeadingH,
-        /*rank=*/strategy.captures.maybeLeadingRank,
-        // TODO: capture and generalize mostMinorDim.
-        /*mostMinorDim=*/strategy.captures.maybeLeadingRank - 1,
-        /*opSizes=*/strategy.captures.leadingOpSizes,
-        /*numThreads=*/strategy.getNumThreadsXInBlock(),
-        /*mappingAttr=*/strategy.allThreadAttrs.front(),
-        /*maxVectorSize=*/vectorSize);
-  }
-
-  // Staged reduction step 1: break gridReductionH apart.
+  // Staged reduction step 1: break gridReductionH apart and fuse the optional
+  // leading operation.
   auto [blockParallelForeachThreadOp, blockParallelFillH, blockCombinerOpH] =
       buildTileReductionUsingScfForeach(
           /*b=*/b,
@@ -143,6 +125,8 @@ static void buildStagedReductionStrategyThreadLevel(
           /*tileSize=*/strategy.getNumThreadsXInBlock(),
           /*reductionVectorSize=*/strategy.getVectorSize(),
           /*mappingAttr=*/strategy.allThreadAttrs[0]);
+  maybeTiledLeadingH = b.create<FuseIntoContainingOp>(
+      maybeTiledLeadingH, blockParallelForeachThreadOp);
 
   // Staged reduction step 2: multi-warp shuffle reduce.
   // Map the combiner reduction to one thread along y. Mapping this part along

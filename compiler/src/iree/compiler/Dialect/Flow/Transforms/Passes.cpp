@@ -261,9 +261,9 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
       .addPass(mlir::createCanonicalizerPass)
       .addPass(mlir::createCSEPass)
       // Elementwise fusion.
-      .addPass([]() {
-        return createFusionOfTensorOpsPass(clEnableAggressiveFusion);
-      })
+      //   .addPass([]() {
+      //     return createFusionOfTensorOpsPass(clEnableAggressiveFusion);
+      //   })
       .addPredicatedPass(clEnableLinalgDetensorize,
                          mlir::createLinalgDetensorizePass)
       .addPass(mlir::createCanonicalizerPass)
