@@ -75,6 +75,15 @@ transform_ext::StructuredOpMatcher::rank(NumLowerEqualTo maxRank) {
   return *this;
 }
 
+transform_ext::StructuredOpMatcher &
+transform_ext::StructuredOpMatcher::rank(NumEqualsTo rank) {
+  predicates.push_back([=](linalg::LinalgOp linalgOp) -> bool {
+    LLVM_DEBUG(DBGS() << "rank == " << rank.value);
+    return linalgOp.getNumLoops() >= rank.value;
+  });
+  return *this;
+}
+
 StringRef stringifyShapeKind(transform_ext::ShapeKind kind) {
   switch (kind) {
   case transform_ext::ShapeKind::Static:
@@ -648,4 +657,21 @@ void transform_ext::makeReductionMatcher(
                          captures.maybeTrailingOutputElementalTypeBitWidth));
   reduction = reduction.result(0, HasAnyUse(), trailing, OptionalMatch())
                   .allTilableOpsCaptured<func::FuncOp>();
+}
+
+void transform_ext::makeConvolutionMatcher(
+    transform_ext::StructuredOpMatcher &convolution,
+    MatchedConvolutionCaptures &captures) {
+  convolution =
+      m_StructuredOp()
+          .rank(NumEqualsTo(9))
+          .rank(CaptureRank(captures.convolutionRank))
+          // Op has a single most-minor reduction.
+          .dim({2, 3, 4, 6}, utils::IteratorType::reduction)
+          // All other dimensions are parallel.
+          .dim(AllDimsExcept({2, 3, 4, 6}), utils::IteratorType::parallel)
+          // Capture op sizes.
+          .dim(AllDims(), CaptureDims(captures.convolutionOpSizes))
+          // Conv must be the only op in there.
+          .allTilableOpsCaptured<func::FuncOp>();
 }

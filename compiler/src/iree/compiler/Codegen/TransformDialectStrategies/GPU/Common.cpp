@@ -412,3 +412,34 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetReductionStrategy(
 
   return success();
 }
+
+LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
+    func::FuncOp entryPoint, linalg::LinalgOp op, const GPUModel &gpuModel) {
+  // Uncomment to simplify the undersanding of what dispatch region correspond
+  // to what IR at a point where it really matters.
+  // entryPoint.dump();
+  // 1. Match a convolution.
+  StructuredOpMatcher convolution;
+  transform_ext::MatchedConvolutionCaptures captures;
+  makeConvolutionMatcher(convolution, captures);
+  if (!matchPattern(op, convolution)) return failure();
+
+  // 2. Construct the configuration and the strategy builder.
+  // TODO: Generalize along the HW axis.
+  auto strategyBuilder = [&](ImplicitLocOpBuilder &b, Value variantH) {
+    // Step 1. Call the matcher. Note that this is the same matcher as used to
+    // trigger this compilation path, so it must always apply.
+    b.create<RegisterMatchCallbacksOp>();
+    auto [convolutionH] = unpackRegisteredMatchCallback<1>(
+        b, "convolution", transform::FailurePropagationMode::Propagate,
+        variantH);
+    (void)convolutionH;
+
+    // TODO: create the strategy for conv.
+  };
+
+  // 3. Build strategy embedded into the IR.
+  createTransformRegion(entryPoint, strategyBuilder);
+
+  return success();
+}

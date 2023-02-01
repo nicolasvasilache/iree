@@ -200,7 +200,7 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
       // - Remove unit-extent dimensions.
       .addPass(mlir::createConvertElementwiseToLinalgPass)
       .addPass(mlir::createLinalgFoldUnitExtentDimsPass)
-      .addPass(createInterchangeGenericOpsPass)
+      // .addPass(createInterchangeGenericOpsPass)
       .addPass(memref::createResolveShapedTypeResultDimsPass)
       .addPass(mlir::createCanonicalizerPass)
       .addPass(mlir::createCSEPass)
@@ -216,7 +216,7 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
       .addPass(createSplitReductionPass)
       // SplitReductionPass may create reduction dimension that are not the last
       // dimension.
-      .addPass(createInterchangeGenericOpsPass)
+      // .addPass(createInterchangeGenericOpsPass)
       // Normalize the input indexing map to make the input indexing map
       // identity. This helps fusing named linalg op with a generic op with
       // transpose.

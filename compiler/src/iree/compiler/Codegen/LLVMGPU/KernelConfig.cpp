@@ -515,6 +515,39 @@ static Optional<int64_t> getLinalgDimSize(linalg::LinalgOp op, int64_t d) {
   return std::nullopt;
 }
 
+/// Set configuration for convolution transform dialect based strategy.
+static LogicalResult setConvolutionTransformDialectConfig(
+    func::FuncOp entryPoint, linalg::LinalgOp op,
+    const TargetInfo &targetInfo) {
+  if (!clGPUCodegenTransformDialectFileName.empty() &&
+      clGPUEnableTransformDialectJit) {
+    return entryPoint.emitError()
+           << "option clash in transform dialect lowering config: the filename "
+              "cannot be provided when the jit option is set";
+  }
+
+  if (!clGPUEnableTransformDialectJit &&
+      clGPUCodegenTransformDialectFileName.empty()) {
+    return failure();
+  }
+  if (!targetInfo.hasWarpShuffle) return failure();
+
+  // Transform script file provided, use it.
+  auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(
+      entryPoint.getContext(),
+      IREE::Codegen::DispatchLoweringPassPipeline::TransformDialectCodegen);
+  if (!clGPUCodegenTransformDialectFileName.empty()) {
+    return setTranslationInfo(entryPoint, translationInfo);
+  }
+
+  iree_compiler::gpu::GPUModel gpuModel;
+  if (failed(iree_compiler::gpu::matchAndSetConvolutionStrategy(entryPoint, op,
+                                                                gpuModel)))
+    return failure();
+
+  return setTranslationInfo(entryPoint, translationInfo);
+}
+
 /// Set configuration for reduction transform dialect based strategy.
 static LogicalResult setReductionTransformDialectConfig(
     func::FuncOp entryPoint, linalg::LinalgOp op,
@@ -863,6 +896,10 @@ static LogicalResult setRootConfig(func::FuncOp entryPointFn,
     return setUserConfig(entryPointFn, computeOp, compilationInfo);
   }
   if (auto linalgOp = dyn_cast<linalg::LinalgOp>(computeOp)) {
+    if (succeeded(setConvolutionTransformDialectConfig(entryPointFn, linalgOp,
+                                                       targetInfo))) {
+      return success();
+    }
     if (succeeded(setReductionTransformDialectConfig(entryPointFn, linalgOp,
                                                      targetInfo))) {
       return success();
