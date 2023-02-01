@@ -22,7 +22,7 @@ std::unique_ptr<Pass> createConvertConv2DToImg2ColPass();
 
 // A pass to pad linalg ops to the next integer multiple of `paddingSize`.
 std::unique_ptr<Pass> createPadLinalgOpsToIntegerMultiplePass(
-    int paddingSize = 4);
+    int paddingSize = 16);
 
 //===----------------------------------------------------------------------===//
 // Register all Passes
