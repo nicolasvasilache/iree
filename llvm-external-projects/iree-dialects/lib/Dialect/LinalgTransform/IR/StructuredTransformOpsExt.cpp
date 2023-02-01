@@ -1156,11 +1156,56 @@ reductionCallback(transform_ext::MatchCallbackResult &res, Location loc,
   return emitSilenceableFailure(loc) << "failed to match";
 }
 
+/// Matches *the first* occurrence of such a convolution within an op associated
+/// with the given handle.
+///
+/// Input handles:
+///
+///   - container op, must be associated with one operation.
+///
+/// Output handles:
+///
+///   - convolution op;
+static DiagnosedSilenceableFailure
+convolutionCallback(transform_ext::MatchCallbackResult &res, Location loc,
+                    const mlir::transform::TransformState &state,
+                    ValueRange handles) {
+  if (handles.size() != 1 || state.getPayloadOps(handles[0]).size() != 1) {
+    return emitSilenceableFailure(loc)
+           << "expected one handle to one operation";
+  }
+
+  transform_ext::StructuredOpMatcher pattern;
+  transform_ext::MatchedConvolutionCaptures ignore;
+  transform_ext::makeConvolutionMatcher(pattern, ignore);
+
+  // TODO: need a mechanism for this to go around the entire IR,
+  // potentially with list matches for each group.
+  Operation *root = state.getPayloadOps(handles[0])[0];
+
+  WalkResult walkResult = root->walk([&](Operation *op) {
+    pattern.resetCapture();
+    if (!matchPattern(op, pattern))
+      return WalkResult::advance();
+
+    // TODO: notify properly.
+    LLVM_DEBUG({ DBGS() << "pattern: " << pattern.getCaptured() << "\n"; });
+
+    res.addPayloadGroup({pattern.getCaptured()});
+    return WalkResult::interrupt();
+  });
+
+  if (walkResult.wasInterrupted())
+    return DiagnosedSilenceableFailure::success();
+  return emitSilenceableFailure(loc) << "failed to match";
+}
+
 DiagnosedSilenceableFailure transform_ext::RegisterMatchCallbacksOp::apply(
     mlir::transform::TransformResults &results,
     mlir::transform::TransformState &state) {
   auto &registry = state.addExtension<transform_ext::MatchCallbacksRegistry>();
   registry.registerCallback("_test_match_callback", testMatchCallbackCallback);
+  registry.registerCallback("convolution", convolutionCallback);
   registry.registerCallback("reduction", reductionCallback);
   return DiagnosedSilenceableFailure::success();
 }

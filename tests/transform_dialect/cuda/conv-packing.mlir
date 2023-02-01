@@ -24,13 +24,13 @@ transform.sequence failures(propagate) {
   %pack = transform.structured.match ops{["tensor.pack"]} in %module_op
     : (!pdl.operation) -> !transform.op<"tensor.pack">
   transform.structured.lower_pack %pack : (!transform.op<"tensor.pack">) 
-    -> (!transform.op<"tensor.pad">, !transform.op<"tensor.expand_shape">, !transform.op<"linalg.generic">)
+    -> (!transform.op<"tensor.pad">, !transform.op<"tensor.expand_shape">, !transform.op<"linalg.transpose">)
 
   %unpack = transform.structured.match ops{["tensor.unpack"]} in %module_op
     : (!pdl.operation) -> !transform.op<"tensor.unpack">
   transform.structured.lower_unpack %unpack : (!transform.op<"tensor.unpack">) 
     -> (!transform.op<"tensor.empty">, 
-        !transform.op<"linalg.generic">,
+        !transform.op<"linalg.transpose">,
         !transform.op<"tensor.collapse_shape">,
         !transform.op<"tensor.extract_slice">)
 }

@@ -107,6 +107,10 @@ LogicalResult matchAndSetReductionStrategy(func::FuncOp entryPoint,
                                            linalg::LinalgOp op,
                                            const GPUModel& gpuModel);
 
+LogicalResult matchAndSetConvolutionStrategy(func::FuncOp entryPoint,
+                                             linalg::LinalgOp op,
+                                             const GPUModel& gpuModel);
+
 }  // namespace gpu
 }  // namespace iree_compiler
 }  // namespace mlir

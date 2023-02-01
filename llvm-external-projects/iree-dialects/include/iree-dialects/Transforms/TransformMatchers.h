@@ -202,6 +202,7 @@ public:
   // TODO: Base class, derived class and proper API.
   StructuredOpMatcher &rank(NumGreaterEqualTo minRank);
   StructuredOpMatcher &rank(NumLowerEqualTo maxRank);
+  StructuredOpMatcher &rank(NumEqualsTo maxRank);
 
   /// Adds a predicate checking that the given iteration space dimension is
   /// static/dynamic. The dimension index may be negative, in which case
@@ -543,6 +544,12 @@ struct MatchedReductionCaptures {
   int64_t maybeTrailingOutputElementalTypeBitWidth = 0;
 };
 
+struct MatchedConvolutionCaptures {
+  int64_t convolutionRank = 0;
+  SmallVector<int64_t> convolutionOpSizes = {};
+  int64_t convolutionOutputElementalTypeBitWidth = 0;
+};
+
 /// Creates a group of matchers for:
 ///
 ///     trailing(reduction(leading(), fill()))
@@ -554,6 +561,9 @@ void makeReductionMatcher(StructuredOpMatcher &reduction,
                           StructuredOpMatcher &leading,
                           StructuredOpMatcher &trailing,
                           MatchedReductionCaptures &captures);
+
+void makeConvolutionMatcher(StructuredOpMatcher &convolution,
+                            MatchedConvolutionCaptures &captures);
 
 } // namespace transform_ext
 } // namespace mlir
