@@ -415,9 +415,10 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetReductionStrategy(
 
 LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
     func::FuncOp entryPoint, linalg::LinalgOp op, const GPUModel &gpuModel) {
-  // Uncomment to simplify the undersanding of what dispatch region correspond
+  // Uncomment to simplify the understanding of what dispatch region correspond
   // to what IR at a point where it really matters.
   // entryPoint.dump();
+
   // 1. Match a convolution.
   StructuredOpMatcher convolution;
   transform_ext::MatchedConvolutionCaptures captures;
@@ -427,15 +428,70 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
   // 2. Construct the configuration and the strategy builder.
   // TODO: Generalize along the HW axis.
   auto strategyBuilder = [&](ImplicitLocOpBuilder &b, Value variantH) {
-    // Step 1. Call the matcher. Note that this is the same matcher as used to
-    // trigger this compilation path, so it must always apply.
+    // Step 1. Call the matcher. Note that this is the same matcher as
+    // used to trigger this compilation path, so it must always apply.
     b.create<RegisterMatchCallbacksOp>();
     auto [convolutionH] = unpackRegisteredMatchCallback<1>(
         b, "convolution", transform::FailurePropagationMode::Propagate,
         variantH);
     (void)convolutionH;
 
-    // TODO: create the strategy for conv.
+#if 1
+
+    MLIRContext *ctx = b.getContext();
+    auto blockX =
+        mlir::gpu::GPUBlockMappingAttr::get(ctx, mlir::gpu::Blocks::DimX);
+    auto blockY =
+        mlir::gpu::GPUBlockMappingAttr::get(ctx, mlir::gpu::Blocks::DimY);
+    auto blockZ =
+        mlir::gpu::GPUBlockMappingAttr::get(ctx, mlir::gpu::Blocks::DimZ);
+    auto allBlockAttrs = SmallVector<Attribute>{blockX, blockY, blockZ};
+
+    // TODO: permuting loops that compute arg4 and arg2 would give better
+    // memory access contiguity.
+    TileToForeachThreadAndFuseAndDistributeResult tileResult =
+        buildTileFuseDistToForeachThreadAndWorkgroupCountWithTileSizes(
+            /*builder=*/b,
+            /*rootH=*/convolutionH,
+            /*opsToFuseH=*/{},
+            /*tileSizes=*/
+            getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 1})),
+            /*threadDimMapping=*/b.getArrayAttr(allBlockAttrs));
+
+    // Mapping to threadIdx.y currently triggers sequentialization along x.
+    // This should be revisited.
+    //
+    // auto threadX =
+    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimX);
+    // auto threadY =
+    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimY);
+    // auto threadZ =
+    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimZ);
+    // auto allThreadAttrs = SmallVector<Attribute>{threadX, threadY, threadZ};
+    // TileToForeachThreadAndFuseAndDistributeResult tile2Result =
+    //     buildTileFuseDistToForeachThreadWithTileSizes(
+    //         b, tileResult.tiledOpH, {},
+    //         /*tileSizes=*/
+    //         getAsOpFoldResult(b.getI64ArrayAttr({0, 0, 0, 0, 0, 1})),
+    //         /*threadDimMapping=*/b.getArrayAttr(allThreadAttrs[1]));
+
+    buildTileFuseToScfFor(
+        b, tileResult.tiledOpH, {},
+        /*tileSizes=*/
+        getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 1, 1, 1, 1})));
+
+    Value funcH = b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
+    ApplyPatternsOpPatterns patterns;
+    patterns.rankReducingLinalg = true;
+    funcH = b.create<ApplyPatternsOp>(funcH, patterns);
+    funcH = iree_compiler::buildVectorize(b, funcH);
+    variantH = iree_compiler::buildBufferize(b, variantH);
+    Value funcH2 =
+        b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
+    funcH2 = buildMapToBlockAndThreads(b, funcH2, {32, 1, 1});
+    b.create<IREE::transform_dialect::VectorToMMAConversionOp>(funcH2);
+
+#endif
   };
 
   // 3. Build strategy embedded into the IR.
