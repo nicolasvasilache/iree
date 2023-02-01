@@ -667,9 +667,9 @@ void transform_ext::makeConvolutionMatcher(
           .rank(NumEqualsTo(9))
           .rank(CaptureRank(captures.convolutionRank))
           // Op has a single most-minor reduction.
-          .dim({2, 3, 4, 6}, utils::IteratorType::reduction)
+          .dim({2, 3, 5, 8}, utils::IteratorType::reduction)
           // All other dimensions are parallel.
-          .dim(AllDimsExcept({2, 3, 4, 6}), utils::IteratorType::parallel)
+          .dim(AllDimsExcept({2, 3, 5, 8}), utils::IteratorType::parallel)
           // Capture op sizes.
           .dim(AllDims(), CaptureDims(captures.convolutionOpSizes))
           // Conv must be the only op in there.

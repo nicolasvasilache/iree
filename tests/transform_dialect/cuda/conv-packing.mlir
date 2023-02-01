@@ -23,7 +23,7 @@ transform.sequence failures(propagate) {
     : (!pdl.operation) -> !transform.op<"linalg.conv_2d_nchw_fchw">
   
   transform.structured.pack_greedily %conv
-      gemm_packed_sizes = [8, 16, 32] gemm_inner_dims_order = [1, 2, 0]
+      gemm_packed_sizes = [16, 16, 8] gemm_inner_dims_order = [0, 1, 2]
     : (!transform.op<"linalg.conv_2d_nchw_fchw">) -> !transform.op<"linalg.generic">
 
   %pack = transform.structured.match ops{["tensor.pack"]} in %module_op
