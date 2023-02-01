@@ -524,77 +524,82 @@ static void fuseRootsWithConsumers(MLIRContext *context,
                                    ArrayRef<Operation *> roots,
                                    DominanceInfo const &dominanceInfo,
                                    bool aggressiveFusion) {
-  // Fuse with consumers where possible.
-  for (Operation *root : roots) {
-    SmallVector<Operation *> workList;
-    llvm::SmallBitVector rootOuterParallelLoops = getOuterParallelLoops(root);
-    workList.push_back(root);
-    while (!workList.empty()) {
-      Operation *currRoot = workList.pop_back_val();
-      assert(hasRootOpAttribute(currRoot) &&
-             "unexpected non-root op in worklist");
+  return;
 
-      // Helper function to make the consumer the root instead of the producer
-      // when they are to be fused.
-      auto updateRootTo = [&context, &currRoot](Operation *newRoot) {
-        int64_t rootNumber = getRootNumber(currRoot);
-        setRootAttribute(context, newRoot, rootNumber);
-        removeRootOpAttribute(currRoot);
-        appendToFusionGroup(currRoot, rootNumber);
-      };
+  // // Fuse with consumers where possible.
+  // for (Operation *root : roots) {
+  //   SmallVector<Operation *> workList;
+  //   llvm::SmallBitVector rootOuterParallelLoops =
+  //   getOuterParallelLoops(root); workList.push_back(root); while
+  //   (!workList.empty()) {
+  //     Operation *currRoot = workList.pop_back_val();
+  //     assert(hasRootOpAttribute(currRoot) &&
+  //            "unexpected non-root op in worklist");
 
-      Optional<OpOperand *> fusableUse = getFusableUse(
-          currRoot, dominanceInfo, /*fuseMultiUse=*/aggressiveFusion);
-      if (!fusableUse) continue;
+  //     // Helper function to make the consumer the root instead of the
+  //     producer
+  //     // when they are to be fused.
+  //     auto updateRootTo = [&context, &currRoot](Operation *newRoot) {
+  //       int64_t rootNumber = getRootNumber(currRoot);
+  //       setRootAttribute(context, newRoot, rootNumber);
+  //       removeRootOpAttribute(currRoot);
+  //       appendToFusionGroup(currRoot, rootNumber);
+  //     };
 
-      // Analyse the use to see if it is fusable.
-      Operation *consumerOp = fusableUse.value()->getOwner();
-      if (hasRootOpAttribute(consumerOp) ||
-          hasFusionGroupsAttribute(consumerOp)) {
-        continue;
-      }
+  //     Optional<OpOperand *> fusableUse = getFusableUse(
+  //         currRoot, dominanceInfo, /*fuseMultiUse=*/aggressiveFusion);
+  //     if (!fusableUse) continue;
 
-      if (isFusableWithConsumer(*(fusableUse.value()), rootOuterParallelLoops,
-                                aggressiveFusion)) {
-        updateRootTo(consumerOp);
-        workList.push_back(consumerOp);
-      }
-    }
-  }
+  //     // Analyse the use to see if it is fusable.
+  //     Operation *consumerOp = fusableUse.value()->getOwner();
+  //     if (hasRootOpAttribute(consumerOp) ||
+  //         hasFusionGroupsAttribute(consumerOp)) {
+  //       continue;
+  //     }
+
+  //     if (isFusableWithConsumer(*(fusableUse.value()),
+  //     rootOuterParallelLoops,
+  //                               aggressiveFusion)) {
+  //       updateRootTo(consumerOp);
+  //       workList.push_back(consumerOp);
+  //     }
+  //   }
+  // }
 }
 
 /// Method to check if the consumer of a use can be fused with its producer.
 static bool isFusableWithProducer(
     OpOperand &operand, const llvm::SmallBitVector &rootOuterParallelLoops,
     bool aggressiveFusion) {
-  Operation *producer = operand.get().getDefiningOp();
-  Operation *consumer = operand.getOwner();
+  return false;
+  // Operation *producer = operand.get().getDefiningOp();
+  // Operation *consumer = operand.getOwner();
 
-  auto linalgProducerOp = dyn_cast<linalg::LinalgOp>(producer);
-  auto setEncodingOp = dyn_cast<IREE::LinalgExt::SetEncodingOp>(consumer);
-  if (linalgProducerOp && setEncodingOp) {
-    return linalg::isElementwise(linalgProducerOp) &&
-           linalgProducerOp.getNumLoops() ==
-               setEncodingOp.getSourceType().getRank();
-  }
+  // auto linalgProducerOp = dyn_cast<linalg::LinalgOp>(producer);
+  // auto setEncodingOp = dyn_cast<IREE::LinalgExt::SetEncodingOp>(consumer);
+  // if (linalgProducerOp && setEncodingOp) {
+  //   return linalg::isElementwise(linalgProducerOp) &&
+  //          linalgProducerOp.getNumLoops() ==
+  //              setEncodingOp.getSourceType().getRank();
+  // }
 
-  if (!isa<linalg::LinalgOp>(consumer) || !isa<linalg::LinalgOp>(producer)) {
-    return false;
-  }
+  // if (!isa<linalg::LinalgOp>(consumer) || !isa<linalg::LinalgOp>(producer)) {
+  //   return false;
+  // }
 
-  auto consumerLinalgOp = cast<linalg::LinalgOp>(consumer);
-  if (consumerLinalgOp.isDpsInput(&operand)) {
-    // Only fuse on inputs if both ops are generic ops.
-    if (!aggressiveFusion || !isa<linalg::GenericOp>(consumer) ||
-        !isa<linalg::GenericOp>(producer)) {
-      return false;
-    }
-  } else if (!consumerLinalgOp.isDpsInit(&operand)) {
-    return false;
-  }
+  // auto consumerLinalgOp = cast<linalg::LinalgOp>(consumer);
+  // if (consumerLinalgOp.isDpsInput(&operand)) {
+  //   // Only fuse on inputs if both ops are generic ops.
+  //   if (!aggressiveFusion || !isa<linalg::GenericOp>(consumer) ||
+  //       !isa<linalg::GenericOp>(producer)) {
+  //     return false;
+  //   }
+  // } else if (!consumerLinalgOp.isDpsInit(&operand)) {
+  //   return false;
+  // }
 
-  return areOpsAggresiveFusable(producer, consumer, rootOuterParallelLoops,
-                                aggressiveFusion);
+  // return areOpsAggresiveFusable(producer, consumer, rootOuterParallelLoops,
+  //                               aggressiveFusion);
 }
 
 /// Starting from the `root` op, traverse the operand use-def chain
