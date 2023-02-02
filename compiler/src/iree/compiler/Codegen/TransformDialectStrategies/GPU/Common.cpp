@@ -455,28 +455,28 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
             /*rootH=*/convolutionH,
             /*opsToFuseH=*/{},
             /*tileSizes=*/
-            getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 1})),
-            /*threadDimMapping=*/b.getArrayAttr(allBlockAttrs));
+            getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 4})),
+            /*threadDimMapping=*/b.getArrayAttr({allBlockAttrs}));
 
     // Mapping to threadIdx.y currently triggers sequentialization along x.
     // This should be revisited.
     //
-    // auto threadX =
-    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimX);
-    // auto threadY =
-    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimY);
-    // auto threadZ =
-    //     mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimZ);
-    // auto allThreadAttrs = SmallVector<Attribute>{threadX, threadY, threadZ};
-    // TileToForeachThreadAndFuseAndDistributeResult tile2Result =
-    //     buildTileFuseDistToForeachThreadWithTileSizes(
-    //         b, tileResult.tiledOpH, {},
-    //         /*tileSizes=*/
-    //         getAsOpFoldResult(b.getI64ArrayAttr({0, 0, 0, 0, 0, 1})),
-    //         /*threadDimMapping=*/b.getArrayAttr(allThreadAttrs[1]));
+    auto threadX =
+        mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimX);
+    auto threadY =
+        mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimY);
+    auto threadZ =
+        mlir::gpu::GPUThreadMappingAttr::get(ctx, mlir::gpu::Threads::DimZ);
+    auto allThreadAttrs = SmallVector<Attribute>{threadX, threadY, threadZ};
+    TileToForeachThreadAndFuseAndDistributeResult tile2Result =
+        buildTileFuseDistToForeachThreadWithTileSizes(
+            b, tileResult.tiledOpH, {},
+            /*tileSizes=*/
+            getAsOpFoldResult(b.getI64ArrayAttr({0, 0, 0, 0, 1})),
+            /*threadDimMapping=*/b.getArrayAttr({threadY}));
 
     buildTileFuseToScfFor(
-        b, tileResult.tiledOpH, {},
+        b, tile2Result.tiledOpH, {},
         /*tileSizes=*/
         getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 1, 1, 1, 1})));
 
@@ -488,7 +488,7 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
     variantH = iree_compiler::buildBufferize(b, variantH);
     Value funcH2 =
         b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
-    funcH2 = buildMapToBlockAndThreads(b, funcH2, {32, 1, 1});
+    funcH2 = buildMapToBlockAndThreads(b, funcH2, {32, 4, 1});
     b.create<IREE::transform_dialect::VectorToMMAConversionOp>(funcH2);
 
 #endif
