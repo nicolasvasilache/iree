@@ -122,6 +122,7 @@ public:
         failed(pass->runAfterInterpreter(op))) {
       return pass->signalPassFailure();
     }
+    op->dump();
   }
 
 private:

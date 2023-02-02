@@ -13,11 +13,14 @@
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/AbstractReductionStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/SmallReductionStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/StagedReductionStrategy.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Dialect/SCF/TransformOps/SCFTransformOps.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Transform/IR/TransformOps.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
@@ -458,6 +461,11 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
             getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 1})),
             /*threadDimMapping=*/b.getArrayAttr(allBlockAttrs));
 
+    auto interchangedH = b.create<transform::InterchangeOp>(
+        pdl::OperationType::get(ctx), tileResult.tiledOpH,
+        ArrayRef<int64_t>{4, 5, 2, 3, 0, 1, 6, 7, 8});
+    (void)interchangedH;
+
     // Mapping to threadIdx.y currently triggers sequentialization along x.
     // This should be revisited.
     //
@@ -476,7 +484,7 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
     //         /*threadDimMapping=*/b.getArrayAttr(allThreadAttrs[1]));
 
     buildTileFuseToScfFor(
-        b, tileResult.tiledOpH, {},
+        b, interchangedH, {},
         /*tileSizes=*/
         getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 1, 1, 1, 1})));
 
@@ -484,6 +492,17 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
     ApplyPatternsOpPatterns patterns;
     patterns.rankReducingLinalg = true;
     funcH = b.create<ApplyPatternsOp>(funcH, patterns);
+
+    // Value genericH =
+    //     b.create<MatchOp>(variantH, linalg::GenericOp::getOperationName());
+    // auto interchangedH = b.create<transform::InterchangeOp>(
+    //     pdl::OperationType::get(ctx), genericH,
+    //     ArrayRef<int64_t>{2, 0, 1, 3, 4, 5});
+    // (void)interchangedH;
+    // buildTileFuseToScfFor(b, interchangedH, {},
+    //                       /*tileSizes=*/
+    //                       getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 1})));
+
     funcH = iree_compiler::buildVectorize(b, funcH);
     variantH = iree_compiler::buildBufferize(b, variantH);
     Value funcH2 =
