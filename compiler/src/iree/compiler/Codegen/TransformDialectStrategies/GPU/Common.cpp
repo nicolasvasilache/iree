@@ -16,6 +16,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/TransformOps/LinalgTransformOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Transform/IR/TransformDialect.h"
@@ -480,12 +481,26 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
         /*tileSizes=*/
         getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 1, 1, 1, 1})));
 
+    Value linalgOpH =
+        b.create<MatchOp>(variantH, linalg::GenericOp::getOperationName());
+    auto zeros = b.getF32ArrayAttr({0.0, 0.0, 0.0});
+    auto pdlOperation = pdl::OperationType::get(ctx);
+    b.create<transform::PadOp>(
+        pdlOperation,
+        /*target=*/linalgOpH,
+        /*paddingValues=*/zeros,
+        /*paddingDimensions=*/ArrayRef<int64_t>{1, 1, 1, 1, 1, 1, 16, 16, 8},
+        /*packPaddings=*/ArrayRef<int64_t>{1, 1, 0},
+        /*hoistPaddings=*/ArrayRef<int64_t>{10, 10, 0});
+
     Value funcH = b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
     ApplyPatternsOpPatterns patterns;
     patterns.rankReducingLinalg = true;
     funcH = b.create<ApplyPatternsOp>(funcH, patterns);
+
     funcH = iree_compiler::buildVectorize(b, funcH);
-    variantH = iree_compiler::buildBufferize(b, variantH);
+    variantH = iree_compiler::buildBufferize(b, variantH,
+                                             /*targetGpu=*/true);
     Value funcH2 =
         b.create<MatchOp>(variantH, func::FuncOp::getOperationName());
     funcH2 = buildMapToBlockAndThreads(b, funcH2, {32, 1, 1});

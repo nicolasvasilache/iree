@@ -257,7 +257,7 @@ mlir::iree_compiler::
 // TODO: configure patterns.
 Value mlir::iree_compiler::buildVectorize(ImplicitLocOpBuilder &b,
                                           Value funcH) {
-  return b.create<VectorizeOp>(funcH);
+  return b.create<VectorizeOp>(funcH, /*vectorizePadding=*/true);
 }
 
 /// Bufferize and drop HAL descriptor from memref ops.
