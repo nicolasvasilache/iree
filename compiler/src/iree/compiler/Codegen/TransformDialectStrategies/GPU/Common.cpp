@@ -455,7 +455,7 @@ LogicalResult mlir::iree_compiler::gpu::matchAndSetConvolutionStrategy(
             /*rootH=*/convolutionH,
             /*opsToFuseH=*/{},
             /*tileSizes=*/
-            getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 1})),
+            getAsOpFoldResult(b.getI64ArrayAttr({1, 1, 0, 0, 0, 1})),
             /*threadDimMapping=*/b.getArrayAttr(allBlockAttrs));
 
     // Mapping to threadIdx.y currently triggers sequentialization along x.

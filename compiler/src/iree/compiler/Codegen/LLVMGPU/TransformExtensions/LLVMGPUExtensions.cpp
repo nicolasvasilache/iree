@@ -628,6 +628,8 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
   }
   MLIRContext *ctx = target->getContext();
 
+  llvm::errs() << "AAAAA\n";
+
   // Step 1. Unroll vectors to native size.
   RewritePatternSet unrollPatterns(ctx);
   vector::populateVectorUnrollPatterns(
@@ -639,16 +641,20 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
     return emitDefaultDefiniteFailure(target);
   }
 
+  llvm::errs() << "BBBBB\n";
+
   // TODO: Step 2. add pattern to propagate the extract through the scf.for ops.
 
   // Step 3. Convert slice of contract operations to wmma ops.
-  RewritePatternSet patterns(ctx);
-  mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
-  populatePrepareVectorToMMAPatterns(patterns, /*llvmgpuUseMMASync=*/false);
-  if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns)))) {
-    target->emitOpError("vector to mma patterns failed to apply");
-    return emitDefaultDefiniteFailure(target);
-  }
+  // RewritePatternSet patterns(ctx);
+  // mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
+  // populatePrepareVectorToMMAPatterns(patterns, /*llvmgpuUseMMASync=*/false);
+  // if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns)))) {
+  //   target->emitOpError("vector to mma patterns failed to apply");
+  //   return emitDefaultDefiniteFailure(target);
+  // }
+
+  llvm::errs() << "CCCCC\n";
   convertVectorToMMAOps(target);
 
   results.push_back(target);

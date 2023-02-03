@@ -533,7 +533,7 @@ Optional<SmallVector<int64_t>> getWmmaNativeVectorSize(Operation *op) {
   if (auto contract = dyn_cast<vector::ContractionOp>(op)) {
     int64_t k = contract.getLhsType().getElementType().isF16() ? 16 : 8;
     SmallVector<int64_t> nativeSize(contract.getIteratorTypes().size() - 3, 1);
-    nativeSize.append({m, n, k});
+    nativeSize.append({k, m, n});
     return nativeSize;
   }
   if (auto writeOp = dyn_cast<vector::TransferWriteOp>(op)) {
