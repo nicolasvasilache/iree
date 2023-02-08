@@ -46,12 +46,11 @@ static void populateVectorizationPatterns(RewritePatternSet &patterns) {
   vector::populateVectorReductionToContractPatterns(patterns);
 }
 
-static Optional<SmallVector<int64_t>> unrollOrder(Operation *op) {
-  auto contract = dyn_cast<vector::ContractionOp>(op);
-  if (!contract) return std::nullopt;
+/// Pick an unrolling order that will allow tensorcore operation to reuse LHS
+/// register. This is needed to get good performance on sm_80 target.
+Optional<SmallVector<int64_t>> gpuMmaUnrollOrder(
+    vector::ContractionOp contract) {
   SmallVector<int64_t> order;
-  // Pick an unrolling order that will allow tensorcore operation to reuse LHS
-  // register. This is needed to get good performance on sm_80 target.
   // First make reduction the outer dimensions.
   for (auto [index, iter] : llvm::enumerate(contract.getIteratorTypes())) {
     if (vector::isReductionIterator(iter)) {
@@ -230,6 +229,11 @@ static Optional<SmallVector<int64_t>> getGPUTensorCoreNativeVectorSize(
 }
 
 static void populateVectorUnrollPatterns(RewritePatternSet &patterns) {
+  auto unrollOrder = [](Operation *op) -> Optional<SmallVector<int64_t>> {
+    auto contract = dyn_cast<vector::ContractionOp>(op);
+    if (!contract) return std::nullopt;
+    return gpuMmaUnrollOrder(contract);
+  };
   vector::populateVectorUnrollPatterns(
       patterns, vector::UnrollVectorOptions()
                     .setNativeShapeFn(getGPUTensorCoreNativeVectorSize)

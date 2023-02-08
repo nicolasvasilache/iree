@@ -36,6 +36,7 @@ iree_compiler_cc_library(
         "KernelConfig.h",
         "TilingUtils.h",
         "TransposeUtils.h",
+        "Utils.h",
     ],
     deps = [
         "//compiler/src/iree/compiler/Codegen:PassHeaders",

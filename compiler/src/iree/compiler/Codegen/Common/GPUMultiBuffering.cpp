@@ -36,6 +36,9 @@ struct GPUMultiBufferingPass
       allocs.push_back(allocOp);
       return WalkResult::advance();
     });
+    //
+    // Apply to scf.for.
+    //
     // Apply multi-buffering to all of them.
     for (memref::AllocOp alloc : allocs) {
       if (failed(memref::multiBuffer(alloc, numBuffers)))
