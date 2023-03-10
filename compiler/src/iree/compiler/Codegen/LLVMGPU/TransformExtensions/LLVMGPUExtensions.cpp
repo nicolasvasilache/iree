@@ -31,6 +31,7 @@
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Visitors.h"
@@ -66,6 +67,29 @@ void mlir::iree_compiler::registerTransformDialectLLVMGPUExtension(
 // IREE-specific LLVMGPU transformations.
 //===---------------------------------------------------------------------===//
 
+static LogicalResult checkNoMoreWarpMappingAttributes(
+    scf::ForallOp forallOp,
+    ArrayRef<DeviceMappingAttrInterface> warpMappingAttributes) {
+  auto maybeMapping = forallOp.getMapping();
+  // If no mapping, we are good.
+  if (!maybeMapping) return success();
+
+  // If the intersection is empty, we are good.
+  SetVector<Attribute> s1(maybeMapping->begin(), maybeMapping->end());
+  SetVector<Attribute> s2(warpMappingAttributes.begin(),
+                          warpMappingAttributes.end());
+  int64_t sizeBefore = s1.size();
+  s1.set_subtract(s2);
+  if (sizeBefore == s1.size()) return success();
+
+  // Otherwise, fail.
+  LDBG("In func:" << forallOp->getParentOfType<func::FuncOp>() << "\n");
+  LDBG("--forall with warp attr was not mapped:" << forallOp << "\n");
+  forallOp->emitOpError(
+      "Mapping failed: is threadIdx.x a multiple of the warp size?");
+  return failure();
+}
+
 void transform_dialect::MapNestedForallToGpuThreadsOp::build(
     OpBuilder &builder, OperationState &result, Value target,
     ArrayRef<int64_t> workgroupSize) {
@@ -78,44 +102,26 @@ void transform_dialect::MapNestedForallToGpuThreadsOp::build(
 }
 
 /// Return a flatten thread id for the workgroup with given sizes.
-static OpFoldResult getFlatId(RewriterBase &rewriter, Location loc,
-                              ArrayRef<OpFoldResult> threads,
-                              ArrayRef<OpFoldResult> workgroupSize) {
-  IndexType indexType = rewriter.getIndexType();
-  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-  Value threadIdX =
-      workgroupSize[0] == 1
-          ? zero
-          : rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::x);
-  Value threadIdY =
-      workgroupSize[1] == 1
-          ? zero
-          : rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::y);
-  Value threadIdZ =
-      workgroupSize[2] == 1
-          ? zero
-          : rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::z);
-
+static OpFoldResult getLinearThreadId(RewriterBase &rewriter, Location loc,
+                                      ArrayRef<OpFoldResult> threads,
+                                      ArrayRef<OpFoldResult> workgroupSize) {
+  assert(threads.size() == 3 && "expected 3 threads");
+  assert(workgroupSize.size() == 3 && "expected 3 workgroup sizes");
   AffineExpr tx, ty, tz, BDX, BDY;
   bindDims(rewriter.getContext(), tx, ty, tz);
   bindSymbols(rewriter.getContext(), BDX, BDY);
-  // These can become symbolic when needed.
-  BDX = getAffineConstantExpr(workgroupSize[0], rewriter.getContext());
-  BDY = getAffineConstantExpr(workgroupSize[1], rewriter.getContext());
-
   SmallVector<OpFoldResult> threadsAndWorkGroups(threads);
   llvm::append_range(threadsAndWorkGroups, workgroupSize);
-  OpFoldResult linearThreadId = makeComposedFoldedAffineApply(
+  return makeComposedFoldedAffineApply(
       rewriter, loc, tx + ty * BDX + tz * BDX * BDY, threadsAndWorkGroups);
-  return linearThreadId;
 }
 
 /// Rewrite scf.forall by distributing a flat id onto multiple dimensions.
 // This is a derived version of mapNestedForeachToThreadsImpl that handles flat
 // ids to support distributing with a different shape than the block sizes.
-static DiagnosedSilenceableFailure rewriteOneForallToGpuWithFlagThread(
+static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
     RewriterBase &rewriter, scf::ForallOp forallOp, int64_t flatSize,
-    Value flatId, bool syncAfterDistribute,
+    Value linearThreadId, bool syncAfterDistribute,
     std::optional<transform::TransformOpInterface> transformOp,
     const ArrayRef<DeviceMappingAttrInterface> &threadMappingAttributes) {
   // Step 0. Target-specific verifications. There is no good place to anchor
@@ -174,7 +180,7 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithFlagThread(
 
   // Step 3. Create the gpu.thread ops and map the induction variables to the
   // newly created ops.
-  Value flatThreadId = flatId;
+  Value flatThreadId = linearThreadId;
   Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   SmallVector<Value> threadOpsUpdated;
   int64_t flatblockDim = 1;
@@ -216,7 +222,7 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithFlagThread(
   if (flatblockDim != flatSize) {
     Value blockIdx = rewriter.create<arith::ConstantIndexOp>(loc, flatblockDim);
     predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
-                                               flatId, blockIdx);
+                                               linearThreadId, blockIdx);
   }
   // Step 5. Move the body of forallOp.
   // Erase the terminator first, it will not be used.
@@ -252,6 +258,38 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithFlagThread(
   rewriter.eraseOp(forallOp);
 
   return DiagnosedSilenceableFailure::success();
+}
+
+static LogicalResult rewriteOneForallToGpuWithLinearThreadId(
+    RewriterBase &rewriter, scf::ForallOp forallOp, int64_t numWarps,
+    ArrayRef<OpFoldResult> foldedThreads, ArrayRef<OpFoldResult> workgroupSize,
+    bool syncAfterDistribute,
+    std::optional<transform::TransformOpInterface> transformOp,
+    const ArrayRef<DeviceMappingAttrInterface> &warpMappingAttributes) {
+  Location loc = forallOp->getLoc();
+
+  // Ignore forall that do not contain only warp mapping attributes.
+  for (Attribute map : forallOp.getMapping()->getValue())
+    if (!llvm::is_contained(warpMappingAttributes, map))
+      // return WalkResult::skip();
+      return success();
+
+  rewriter.setInsertionPoint(forallOp);
+
+  OpFoldResult linearThreadId =
+      getLinearThreadId(rewriter, loc, foldedThreads, workgroupSize);
+  AffineExpr d0 = rewriter.getAffineDimExpr(0);
+  linearThreadId = makeComposedFoldedAffineApply(
+      rewriter, loc, d0.floorDiv(mlir::iree_compiler::kWarpSize),
+      {linearThreadId});
+
+  DiagnosedSilenceableFailure diagnosedFailure =
+      rewriteOneForallToGpuWithLinearThreadId(
+          rewriter, forallOp, numWarps,
+          getValueOrCreateConstantIndexOp(rewriter, loc, linearThreadId),
+          /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
+
+  return success(diagnosedFailure.succeeded());
 }
 
 // TODO: if the number of threads was wired like the workgroup_count, we could
@@ -297,15 +335,12 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
                                SmallVectorImpl<Value> &threadIds) {
     threadIds.assign(threads);
   };
+
   MLIRContext *ctx = target->getContext();
   SmallVector<DeviceMappingAttrInterface> threadMappingAttributes = {
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimX),
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimY),
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimZ)};
-  SmallVector<DeviceMappingAttrInterface> warpMappingAttributes = {
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimX),
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimY),
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimZ)};
   DiagnosedSilenceableFailure diag =
       mlir::transform::gpu::mapNestedForeachToThreadsImpl(
           rewriter, target, workgroupSize, threadIdGenerator, true, transformOp,
@@ -317,62 +352,32 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
     exportOp->setAttr(exportOp.getWorkgroupSizeAttrName(), newAttr);
   }
 
-  // Map warpIds, only if the total number of threads is a multiple of the warp
-  // size.
+  // Map warpIds, only warpSize divides the total number of threads.
   int64_t totalNumThreads =
       workgroupSize[0] * workgroupSize[1] * workgroupSize[2];
+  SmallVector<DeviceMappingAttrInterface> warpMappingAttributes = {
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimX),
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimY),
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimZ)};
   if (diag.succeeded() && (totalNumThreads % kWarpSize == 0)) {
-    target->walk([&](scf::ForallOp forallOp) {
-      // Ignore cases with different attributes.
-      for (Attribute map : forallOp.getMapping()->getValue()) {
-        if (!llvm::is_contained(warpMappingAttributes, map)) {
-          return WalkResult::skip();
-        }
+    // Walk forall ops and try to map all warpMappingAttributes.
+    WalkResult res = target->walk([&](scf::ForallOp forallOp) -> WalkResult {
+      // Optimize away threadIds that are always zero.
+      SmallVector<OpFoldResult> foldedThreads =
+          getAsIndexOpFoldResult(ctx, {0, 0, 0});
+      for (int64_t i = 0; i < 3; ++i) {
+        if (workgroupSize[i] == 1) continue;
+        foldedThreads[i] = threads[i];
       }
-      if (diag.succeeded()) {
-        rewriter.setInsertionPoint(forallOp);
-
-        SmallVector<OpFoldResult> foldedThreads =
-            getAsIndexOpFoldResult(ctx, {0, 0, 0});
-        for (int64_t i = 0; i < 3; ++i) {
-          if (workgroupSize[i] == 1) continue;
-          foldedThreads[i] = threads[i];
-        }
-
-        OpFoldResult flatId =
-            getFlatId(rewriter, forallOp.getLoc(), foldedThreads,
-                      getAsIndexOpFoldResult(ctx, workgroupSize));
-        AffineExpr d0 = rewriter.getAffineDimExpr(0);
-        flatId = makeComposedFoldedAffineApply(
-            rewriter, forallOp.getLoc(), d0.floorDiv(kWarpSize), {flatId});
-        diag = rewriteOneForallToGpuWithFlagThread(
-            rewriter, forallOp, totalNumThreads / kWarpSize,
-            getValueOrCreateConstantIndexOp(rewriter, loc, flatId),
-            /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
-      }
-      return diag.succeeded() ? WalkResult::advance() : WalkResult::interrupt();
+      int64_t numWarps = totalNumThreads / kWarpSize;
+      (void)rewriteOneForallToGpuWithLinearThreadId(
+          rewriter, forallOp, numWarps, foldedThreads,
+          getAsIndexOpFoldResult(ctx, workgroupSize),
+          /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
+      return checkNoMoreWarpMappingAttributes(forallOp, warpMappingAttributes);
     });
-  }
-
-  auto walkResult = target->walk([&warpMappingAttributes](
-                                     scf::ForallOp forallOp) -> WalkResult {
-    auto maybeMapping = forallOp.getMapping();
-    if (!maybeMapping) return WalkResult::advance();
-    for (Attribute attr : *maybeMapping) {
-      for (const auto &warpAttr : warpMappingAttributes) {
-        if (attr == warpAttr) {
-          LDBG("In func:" << forallOp->getParentOfType<func::FuncOp>() << "\n");
-          LDBG("--forall with warp attr was not mapped:" << forallOp << "\n");
-          forallOp->emitOpError(
-              "Mapping failed: is threadIdx.x a multiple of the warp size?");
-          return WalkResult::interrupt();
-        }
-      }
-    }
-    return WalkResult::advance();
-  });
-  if (walkResult.wasInterrupted()) {
-    return emitDefaultDefiniteFailure(target);
+    // If any warp mapping attribute remains, fail hard.
+    if (res.wasInterrupted()) return emitDefaultDefiniteFailure(target);
   }
 
   results.push_back(target);
