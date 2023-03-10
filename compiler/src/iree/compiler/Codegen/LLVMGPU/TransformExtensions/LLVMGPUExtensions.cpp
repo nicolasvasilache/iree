@@ -11,6 +11,7 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "llvm/Support/Debug.h"
 #include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -30,6 +31,13 @@
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+
+using llvm::dbgs;
+
+#define DEBUG_TYPE "transform-llvmgpu-extensions"
+
+#define DBGS() (dbgs() << '[' << DEBUG_TYPE << "] ")
+#define LDBG(X) LLVM_DEBUG(dbgs() << '[' << DEBUG_TYPE << "] " << X)
 
 using namespace mlir;
 using namespace mlir::iree_compiler::IREE;
@@ -333,6 +341,8 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
     for (Attribute attr : *maybeMapping) {
       for (const auto &warpAttr : warpMappingAttributes) {
         if (attr == warpAttr) {
+          LDBG("In func:" << forallOp->getParentOfType<func::FuncOp>() << "\n");
+          LDBG("--forall with warp attr was not mapped:" << forallOp << "\n");
           forallOp->emitOpError(
               "Mapping failed: is threadIdx.x a multiple of the warp size?");
           return WalkResult::interrupt();
