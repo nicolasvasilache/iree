@@ -180,6 +180,10 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
 
   // Step 3. Create the gpu.thread ops and map the induction variables to the
   // newly created ops.
+  // blockDims is in [x, y, z] order, but we delinearize in [z, y, x] order.
+  SmallVector<int64_t> reverseBlockDims(llvm::reverse(blockDims));
+  SmallVector<int64_t> strides = computeStrides(reverseBlockDims);
+
   Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   SmallVector<Value> threadOpsUpdated;
   int64_t flatblockDim = 1;
@@ -372,12 +376,12 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
           rewriter, forallOp, numWarps, foldedThreads,
           getAsIndexOpFoldResult(ctx, workgroupSize),
           /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
-      
+
       // If any warp mapping attribute remains, interrupt and fail hard.
       if (failed(res))
         return checkNoMoreWarpMappingAttributes(forallOp,
                                                 warpMappingAttributes);
-      
+
       return success();
     });
 

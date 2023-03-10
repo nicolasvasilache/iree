@@ -41,10 +41,10 @@ func.func @reduce(%arg : !in_tensor_t) -> (!out_tensor_t) {
 // RUN: FileCheck %s --check-prefix=EXEC
 
   //     CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
+  //     CHECK-DAG: %[[TIDX:.]] = gpu.thread_id  x
   //     CHECK-DAG: %[[workgroup_id_x:.*]] = hal.interface.workgroup.id[0] : index
   //     CHECK-DAG: %[[SHMEM_ALLOC:.*]] = memref.alloc() {alignment = 64 : i64} : memref<1x1024xf32, #gpu.address_space<workgroup>>
 
-  //         CHECK: %[[TIDX:.]] = gpu.thread_id  x
   // Local per-thread scf.for-based reduction.
   //         CHECK: %[[v:.*]] = scf.for {{.*}} -> (vector<f32>) {
   //         CHECK:   vector.transfer_read %{{.*}} : memref<?x?xf32>, vector<f32>

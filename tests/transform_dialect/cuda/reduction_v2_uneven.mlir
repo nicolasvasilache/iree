@@ -37,10 +37,10 @@ func.func @reduce(%arg : !in_tensor_t) -> (!out_tensor_t) {
   //     CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
   //     CHECK-DAG: %[[C1:.*]] = arith.constant 1 : index
   //     CHECK-DAG: %[[F0:.*]] = arith.constant dense<0.000000e+00> : vector<4xf32>
+  //     CHECK-DAG: %[[TIDX:.]] = gpu.thread_id  x
   //     CHECK-DAG: %[[workgroup_id_x:.*]] = hal.interface.workgroup.id[0] : index
   //     CHECK-DAG: %[[SHMEM_ALLOC:.*]] = memref.alloc() {alignment = 64 : i64} : memref<1x128xf32, #gpu.address_space<workgroup>>
 
-  //         CHECK: %[[TIDX:.]] = gpu.thread_id  x
   //         CHECK: %[[IDX:.*]] = affine.apply{{.*}}%[[TIDX]]
   //         CHECK: gpu.barrier
   // Local per-thread scf.for-based reduction.
