@@ -11,6 +11,7 @@
 #include "iree/compiler/Codegen/LLVMGPU/Utils/LLVMGPUUtils.h"
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Conversion/VectorToGPU/VectorToGPU.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -25,9 +26,12 @@
 #include "mlir/Dialect/SCF/IR/DeviceMappingInterface.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Transform/IR/TransformUtils.h"
+#include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
+#include "mlir/IR/AffineExpr.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Visitors.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -74,8 +78,9 @@ void transform_dialect::MapNestedForallToGpuThreadsOp::build(
 }
 
 /// Return a flatten thread id for the workgroup with given sizes.
-static Value getFlatId(Location loc, RewriterBase &rewriter,
-                       ArrayRef<int64_t> workgroupSize) {
+static OpFoldResult getFlatId(RewriterBase &rewriter, Location loc,
+                              ArrayRef<OpFoldResult> threads,
+                              ArrayRef<OpFoldResult> workgroupSize) {
   IndexType indexType = rewriter.getIndexType();
   Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   Value threadIdX =
@@ -93,12 +98,15 @@ static Value getFlatId(Location loc, RewriterBase &rewriter,
 
   AffineExpr tx, ty, tz, BDX, BDY;
   bindDims(rewriter.getContext(), tx, ty, tz);
+  bindSymbols(rewriter.getContext(), BDX, BDY);
   // These can become symbolic when needed.
   BDX = getAffineConstantExpr(workgroupSize[0], rewriter.getContext());
   BDY = getAffineConstantExpr(workgroupSize[1], rewriter.getContext());
-  Value linearThreadId =
-      makeComposedAffineApply(rewriter, loc, tx + ty * BDX + tz * BDX * BDY,
-                              {threadIdX, threadIdY, threadIdZ});
+
+  SmallVector<OpFoldResult> threadsAndWorkGroups(threads);
+  llvm::append_range(threadsAndWorkGroups, workgroupSize);
+  OpFoldResult linearThreadId = makeComposedFoldedAffineApply(
+      rewriter, loc, tx + ty * BDX + tz * BDX * BDY, threadsAndWorkGroups);
   return linearThreadId;
 }
 
@@ -275,24 +283,29 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
   workgroupSize.resize(/*size=*/3, /*value=*/1);
 
   auto transformOp = cast<transform::TransformOpInterface>(getOperation());
-  SimplePatternRewriter rewriter(target);
 
+  SimplePatternRewriter rewriter(target);
+  // Just insert threadIds at the top of the function so we can reuse.
+  rewriter.setInsertionPointToStart(&target.getFunctionBody().front());
+  Location loc = target->getLoc();
+  auto indexType = rewriter.getIndexType();
+  SmallVector<Value> threads{
+      rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::x),
+      rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::y),
+      rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::z)};
+  auto threadIdGenerator = [&](RewriterBase &rewriter, scf::ForallOp forallOp,
+                               SmallVectorImpl<Value> &threadIds) {
+    threadIds.assign(threads);
+  };
   MLIRContext *ctx = target->getContext();
   SmallVector<DeviceMappingAttrInterface> threadMappingAttributes = {
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimX),
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimY),
       gpu::GPUThreadMappingAttr::get(ctx, gpu::Threads::DimZ)};
-
-  auto threadIdGenerator = [](RewriterBase &rewriter, scf::ForallOp forallOp,
-                              SmallVectorImpl<Value> &threadIds) {
-    Location loc = forallOp.getLoc();
-    IndexType indexType = rewriter.getIndexType();
-    threadIds.assign(
-        {rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::x),
-         rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::y),
-         rewriter.create<gpu::ThreadIdOp>(loc, indexType, gpu::Dimension::z)});
-  };
-
+  SmallVector<DeviceMappingAttrInterface> warpMappingAttributes = {
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimX),
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimY),
+      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimZ)};
   DiagnosedSilenceableFailure diag =
       mlir::transform::gpu::mapNestedForeachToThreadsImpl(
           rewriter, target, workgroupSize, threadIdGenerator, true, transformOp,
@@ -304,10 +317,6 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
     exportOp->setAttr(exportOp.getWorkgroupSizeAttrName(), newAttr);
   }
 
-  SmallVector<DeviceMappingAttrInterface> warpMappingAttributes = {
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimX),
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimY),
-      gpu::GPUWarpMappingAttr::get(ctx, gpu::Warps::DimZ)};
   // Map warpIds, only if the total number of threads is a multiple of the warp
   // size.
   int64_t totalNumThreads =
@@ -322,12 +331,23 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
       }
       if (diag.succeeded()) {
         rewriter.setInsertionPoint(forallOp);
-        Value flatId = getFlatId(forallOp.getLoc(), rewriter, workgroupSize);
+
+        SmallVector<OpFoldResult> foldedThreads =
+            getAsIndexOpFoldResult(ctx, {0, 0, 0});
+        for (int64_t i = 0; i < 3; ++i) {
+          if (workgroupSize[i] == 1) continue;
+          foldedThreads[i] = threads[i];
+        }
+
+        OpFoldResult flatId =
+            getFlatId(rewriter, forallOp.getLoc(), foldedThreads,
+                      getAsIndexOpFoldResult(ctx, workgroupSize));
         AffineExpr d0 = rewriter.getAffineDimExpr(0);
-        flatId = makeComposedAffineApply(rewriter, forallOp.getLoc(),
-                                         d0.floorDiv(kWarpSize), {flatId});
+        flatId = makeComposedFoldedAffineApply(
+            rewriter, forallOp.getLoc(), d0.floorDiv(kWarpSize), {flatId});
         diag = rewriteOneForallToGpuWithFlagThread(
-            rewriter, forallOp, totalNumThreads / kWarpSize, flatId,
+            rewriter, forallOp, totalNumThreads / kWarpSize,
+            getValueOrCreateConstantIndexOp(rewriter, loc, flatId),
             /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
       }
       return diag.succeeded() ? WalkResult::advance() : WalkResult::interrupt();
