@@ -33,8 +33,8 @@ hal.executable.variant public @cuda_nvptx_fb, target = <"cuda", "cuda-nvptx-fb",
 //     CHECK-DAG: %[[C0:.*]] = arith.constant 0 : index
 //     CHECK-DAG: %[[C4:.*]] = arith.constant 4 : index
 //     CHECK-DAG: %[[C12:.*]] = arith.constant 12 : index
+//     CHECK-DAG: gpu.thread_id  x
 //     CHECK-NOT:   memref.alloc()
-//         CHECK: gpu.thread_id  x
 //         CHECK: %[[v:.*]] = scf.for %{{.*}} = %[[C0]] to %[[C12]] step %[[C4]] {{.*}} -> (vector<1xf32>) {
 //         CHECK:   vector.transfer_read {{.*}}: memref<1024x13xf32>, vector<1x4xf32>
 //         CHECK:   vector.multi_reduction <add>, %{{.*}} : vector<1x4xf32> to vector<1xf32>
@@ -147,13 +147,13 @@ hal.executable.variant public @cuda_nvptx_fb, target = <"cuda", "cuda-nvptx-fb",
 //   CHECK-LABEL: func.func @group_elementwise_reduction_elementwise
 //     CHECK-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //     CHECK-DAG:   %[[C32:.*]] = arith.constant 32 : index
+//     CHECK-DAG:   %[[TIDX:.]] = gpu.thread_id  x
 //     CHECK-DAG:   %[[workgroup_id_x:.*]] = hal.interface.workgroup.id[0] : index
 //     CHECK-NOT:   memref.alloc()
 
 // Fusion occurred, no barrier before the loop
 //     CHECK-NOT: gpu.barrier
 // Local per-thread scf.for-based reduction.
-//         CHECK: %[[TIDX:.]] = gpu.thread_id  x
 //         CHECK: %[[v:.*]] = scf.for {{.*}} -> (vector<1xf32>)
 //         CHECK:   vector.transfer_read {{.*}} vector<1xf32>
 //         CHECK:   arith.addf{{.*}} : vector<1xf32>
@@ -211,12 +211,12 @@ hal.executable.variant public @cuda_nvptx_fb, target = <"cuda", "cuda-nvptx-fb",
 //   CHECK-LABEL: func.func @group_reduction_larger
 //     CHECK-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //     CHECK-DAG:   %[[workgroup_id_x:.*]] = hal.interface.workgroup.id[0] : index
+//     CHECK-DAG:   %[[TIDX:.]] = gpu.thread_id  x
 //     CHECK-NOT:   memref.alloc()
 
 // Fusion occurred, no barrier before the loop
 //     CHECK-NOT: gpu.barrier
 // Local per-thread scf.for-based reduction.
-//         CHECK: %[[TIDX:.]] = gpu.thread_id  x
 //         CHECK: %[[TIDX_TIMES_4:.]] = affine.apply{{.*}}[%[[TIDX]]]
 //         CHECK: scf.for {{.*}} -> (vector<1xf32>) {
 //         CHECK:   vector.transfer_read {{.*}} vector<4xf32>
@@ -363,10 +363,10 @@ hal.executable.variant public @cuda_nvptx_fb, target = <"cuda", "cuda-nvptx-fb",
 //   CHECK-LABEL: func.func @group_reduction_i8_12345
 //     CHECK-DAG:   %[[C0:.*]] = arith.constant 0 : index
 //     CHECK-DAG:   %[[workgroup_id_x:.*]] = hal.interface.workgroup.id[0] : index
+//     CHECK-DAG:   %[[TIDX:.]] = gpu.thread_id  x
 
 //         CHECK: %[[ALLOC0:.+]] = memref.alloc() {alignment = 64 : i64} : memref<1xi8, #gpu.address_space<workgroup>>
 // Local per-thread scf.for-based reduction.
-//         CHECK: %[[TIDX:.]] = gpu.thread_id  x
 //         CHECK: scf.for {{.*}} -> (vector<1xi8>)
 //         CHECK:   vector.transfer_read {{.*}} vector<1xi8>
 //         CHECK:   arith.addi{{.*}} : vector<1xi8>

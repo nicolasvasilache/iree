@@ -180,7 +180,6 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
 
   // Step 3. Create the gpu.thread ops and map the induction variables to the
   // newly created ops.
-  Value flatThreadId = linearThreadId;
   Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   SmallVector<Value> threadOpsUpdated;
   int64_t flatblockDim = 1;
@@ -195,13 +194,13 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
     }
     dimUsed *= dim;
     AffineExpr d0 = rewriter.getAffineDimExpr(0);
-    Value dimId =
-        dimUsed == flatblockDim
-            ? flatThreadId
-            : makeComposedAffineApply(rewriter, loc, d0 % dim, {flatThreadId});
+    Value dimId = dimUsed == flatblockDim
+                      ? linearThreadId
+                      : makeComposedAffineApply(rewriter, loc, d0 % dim,
+                                                {linearThreadId});
     threadOpsUpdated.push_back(dimId);
-    flatThreadId = makeComposedAffineApply(rewriter, loc, d0.floorDiv(dim),
-                                           {flatThreadId});
+    linearThreadId = makeComposedAffineApply(rewriter, loc, d0.floorDiv(dim),
+                                             {linearThreadId});
   }
   IRMapping bvm;
   for (auto [blockIdx, blockDim] :
@@ -269,10 +268,9 @@ static LogicalResult rewriteOneForallToGpuWithLinearThreadId(
   Location loc = forallOp->getLoc();
 
   // Ignore forall that do not contain only warp mapping attributes.
+  // Return a failure that encodes "failure to match".
   for (Attribute map : forallOp.getMapping()->getValue())
-    if (!llvm::is_contained(warpMappingAttributes, map))
-      // return WalkResult::skip();
-      return success();
+    if (!llvm::is_contained(warpMappingAttributes, map)) return failure();
 
   rewriter.setInsertionPoint(forallOp);
 
@@ -370,12 +368,19 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
         foldedThreads[i] = threads[i];
       }
       int64_t numWarps = totalNumThreads / kWarpSize;
-      (void)rewriteOneForallToGpuWithLinearThreadId(
+      LogicalResult res = rewriteOneForallToGpuWithLinearThreadId(
           rewriter, forallOp, numWarps, foldedThreads,
           getAsIndexOpFoldResult(ctx, workgroupSize),
           /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
-      return checkNoMoreWarpMappingAttributes(forallOp, warpMappingAttributes);
+      
+      // If any warp mapping attribute remains, interrupt and fail hard.
+      if (failed(res))
+        return checkNoMoreWarpMappingAttributes(forallOp,
+                                                warpMappingAttributes);
+      
+      return success();
     });
+
     // If any warp mapping attribute remains, fail hard.
     if (res.wasInterrupted()) return emitDefaultDefiniteFailure(target);
   }

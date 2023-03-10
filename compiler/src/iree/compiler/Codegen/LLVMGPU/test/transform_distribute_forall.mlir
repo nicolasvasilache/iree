@@ -25,8 +25,8 @@ hal.executable private @distribute {
         %c2 = arith.constant 2 : index
         %c0 = arith.constant 0 : index
         %1 = hal.interface.binding.subspan set(0) binding(1) type(storage_buffer) alignment(64) offset(%c0) : memref<1024x1024xf16>
-// CHECK: %[[TX:.+]] = gpu.thread_id  x
-// CHECK: %[[TY:.+]] = gpu.thread_id  y
+// CHECK-DAG: %[[TX:.+]] = gpu.thread_id  x
+// CHECK-DAG: %[[TY:.+]] = gpu.thread_id  y
 // CHECK: %[[COND:.*]] = arith.cmpi ult
 // CHECK: scf.if %[[COND]] {
 // CHECK:   vector.transfer_write %{{.*}}, %{{.*}}[%[[TY]], %[[TX]]] {in_bounds = [true]} : vector<1xf16>, memref<1024x1024xf16>
