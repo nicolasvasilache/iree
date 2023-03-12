@@ -48,7 +48,7 @@ hal.executable private @distribute {
         ^bb0(%variant_op: !pdl.operation):
         %17 = transform.structured.match ops{["func.func"]} in %variant_op 
           : (!pdl.operation) -> !pdl.operation
-        %18 = transform.iree.map_nested_forall_to_gpu_threads %17 {workgroup_size = [64, 4, 1]}
+        %18 = transform.iree.map_nested_forall_to_gpu_threads %17 {workgroup_size = [65, 32, 3]}
 
         // Late canonicalizations to cleanup and pass the checks.
         // Needs to occur on the whole variant to perform cse on the workgroup_count region

@@ -120,7 +120,7 @@ static OpFoldResult getLinearThreadId(RewriterBase &rewriter, Location loc,
 // This is a derived version of mapNestedForeachToThreadsImpl that handles flat
 // ids to support distributing with a different shape than the block sizes.
 static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
-    RewriterBase &rewriter, scf::ForallOp forallOp, int64_t flatSize,
+    RewriterBase &rewriter, scf::ForallOp forallOp, int64_t numWarps,
     Value linearThreadId, bool syncAfterDistribute,
     std::optional<transform::TransformOpInterface> transformOp,
     const ArrayRef<DeviceMappingAttrInterface> &threadMappingAttributes) {
@@ -166,6 +166,8 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
     }
   }
 
+  LDBG("Start delinearizing forall: " << forallOp << "\n");
+
   // Step 2. sort the values by the corresponding DeviceMappingAttrInterface.
   auto comparator = [&](DeviceMappingAttrInterface a,
                         DeviceMappingAttrInterface b) -> bool {
@@ -181,31 +183,65 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
   // Step 3. Create the gpu.thread ops and map the induction variables to the
   // newly created ops.
   // blockDims is in [x, y, z] order, but we delinearize in [z, y, x] order.
-  SmallVector<int64_t> reverseBlockDims(llvm::reverse(blockDims));
-  SmallVector<int64_t> strides = computeStrides(reverseBlockDims);
+  LLVM_DEBUG(llvm::interleaveComma(
+                 blockDims, DBGS() << "--delinearizing with dims(x, y, z): ");
+             dbgs() << "\n";);
 
-  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  SmallVector<int64_t> reverseBlockDims(llvm::reverse(blockDims));
+  reverseBlockDims.push_back(32);
+  LLVM_DEBUG(
+      llvm::interleaveComma(
+          reverseBlockDims,
+          DBGS() << "--delinearizing with reverse dims(wz, wy, wx, tx): ");
+      dbgs() << "\n";);
+
+  SmallVector<int64_t> strides = computeStrides(reverseBlockDims);
+  AffineExpr d0;
+  bindDims(rewriter.getContext(), d0);
+  SmallVector<AffineExpr> delinearizingExprs = delinearize(d0, strides);
+  LLVM_DEBUG(
+      llvm::interleaveComma(
+          strides, DBGS() << "--delinearizing strides(wz, wy, wx, tx): ");
+      dbgs() << "\n"; llvm::interleaveComma(
+          delinearizingExprs, DBGS()
+                                  << "--delinearizing exprs(wz, wy, wx, tx): ");
+      dbgs() << "\n";);
   SmallVector<Value> threadOpsUpdated;
+  for (AffineExpr e : delinearizingExprs) {
+    LDBG("----step func: " << forallOp->getParentOfType<func::FuncOp>()
+                           << "\n");
+    threadOpsUpdated.push_back(
+        makeComposedAffineApply(rewriter, loc, e, linearThreadId));
+  }
+  LDBG("----step func: " << forallOp->getParentOfType<func::FuncOp>() << "\n");
+  // At this point we have: (wz, wy, wx, tx), drop tx.
+  threadOpsUpdated.resize(3);
+  // And reverse to get to: (wx, wy, wz)
+  threadOpsUpdated = SmallVector<Value>(llvm::reverse(threadOpsUpdated));
+
+  // Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
   int64_t flatblockDim = 1;
   for (int64_t dim : blockDims) {
     flatblockDim *= dim;
   }
-  int64_t dimUsed = 1;
-  for (int64_t dim : blockDims) {
-    if (dim == 1) {
-      threadOpsUpdated.push_back(zero);
-      continue;
-    }
-    dimUsed *= dim;
-    AffineExpr d0 = rewriter.getAffineDimExpr(0);
-    Value dimId = dimUsed == flatblockDim
-                      ? linearThreadId
-                      : makeComposedAffineApply(rewriter, loc, d0 % dim,
-                                                {linearThreadId});
-    threadOpsUpdated.push_back(dimId);
-    linearThreadId = makeComposedAffineApply(rewriter, loc, d0.floorDiv(dim),
-                                             {linearThreadId});
-  }
+  // int64_t dimUsed = 1;
+  // for (int64_t dim : blockDims) {
+  //   if (dim == 1) {
+  //     threadOpsUpdated.push_back(zero);
+  //     continue;
+  //   }
+  //   dimUsed *= dim;
+  //   AffineExpr d0 = rewriter.getAffineDimExpr(0);
+  //   Value dimId = dimUsed == flatblockDim
+  //                     ? linearThreadId
+  //                     : makeComposedAffineApply(rewriter, loc, d0
+  //                     % dim,
+  //                                               {linearThreadId});
+  //   threadOpsUpdated.push_back(dimId);
+  //   linearThreadId = makeComposedAffineApply(rewriter, loc,
+  //   d0.floorDiv(dim),
+  //                                            {linearThreadId});
+  // }
   IRMapping bvm;
   for (auto [blockIdx, blockDim] :
        llvm::zip(forallOp.getInductionVars(), threadMapping)) {
@@ -216,17 +252,18 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
 
   // Step 4. Maybe create conditionals to predicate the region.
   Value predicate;
-  if (flatblockDim > flatSize) {
+  if (flatblockDim > numWarps) {
     return failureHelper(
         "The requested GPU threads are fewer than the number of loop trip "
         "counts. Try to tile scf.forall before mapping or set "
         "small blockDim.");
   }
-  if (flatblockDim != flatSize) {
+  if (flatblockDim != numWarps) {
     Value blockIdx = rewriter.create<arith::ConstantIndexOp>(loc, flatblockDim);
     predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
                                                linearThreadId, blockIdx);
   }
+
   // Step 5. Move the body of forallOp.
   // Erase the terminator first, it will not be used.
   rewriter.eraseOp(forallOp.getTerminator());
@@ -234,8 +271,8 @@ static DiagnosedSilenceableFailure rewriteOneForallToGpuWithLinearThreadId(
   Block::iterator insertionPoint;
   if (predicate) {
     // Step 5.a. If predicated, move at the beginning.
-    auto ifOp =
-        rewriter.create<scf::IfOp>(loc, predicate, /*withElseRegion=*/false);
+    auto ifOp = rewriter.create<scf::IfOp>(loc, predicate,
+                                           /*withElseRegion=*/false);
     targetBlock = ifOp.thenBlock();
     insertionPoint = ifOp.thenBlock()->begin();
   } else {
@@ -280,10 +317,10 @@ static LogicalResult rewriteOneForallToGpuWithLinearThreadId(
 
   OpFoldResult linearThreadId =
       getLinearThreadId(rewriter, loc, foldedThreads, workgroupSize);
-  AffineExpr d0 = rewriter.getAffineDimExpr(0);
-  linearThreadId = makeComposedFoldedAffineApply(
-      rewriter, loc, d0.floorDiv(mlir::iree_compiler::kWarpSize),
-      {linearThreadId});
+  // AffineExpr d0 = rewriter.getAffineDimExpr(0);
+  // linearThreadId = makeComposedFoldedAffineApply(
+  //     rewriter, loc, d0.floorDiv(mlir::iree_compiler::kWarpSize),
+  //     {linearThreadId});
 
   DiagnosedSilenceableFailure diagnosedFailure =
       rewriteOneForallToGpuWithLinearThreadId(
@@ -303,8 +340,10 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
     transform::TransformState &state) {
   if (!isa<HAL::ExecutableOp, HAL::ExecutableVariantOp>(state.getTopLevel())) {
     state.getTopLevel()->emitOpError(
-        "requires HAL::ExecutableOp or HAL::ExecutableVariantOp toplevel to "
-        "attach the workgroup size information to a nested ExecutableExportOp");
+        "requires HAL::ExecutableOp or HAL::ExecutableVariantOp "
+        "toplevel to "
+        "attach the workgroup size information to a nested "
+        "ExecutableExportOp");
     return emitDefaultDefiniteFailure(target);
   }
 
@@ -325,7 +364,8 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
   auto transformOp = cast<transform::TransformOpInterface>(getOperation());
 
   SimplePatternRewriter rewriter(target);
-  // Just insert threadIds at the top of the function so we can reuse.
+  // Just insert threadIds at the top of the function so we can
+  // reuse.
   rewriter.setInsertionPointToStart(&target.getFunctionBody().front());
   Location loc = target->getLoc();
   auto indexType = rewriter.getIndexType();
@@ -350,7 +390,8 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
 
   if (diag.succeeded()) {
     auto newAttr = rewriter.getIndexArrayAttr(workgroupSize);
-    // TODO: should really be: exportOp.setWorkgroupSizeAttr(newAttr);
+    // TODO: should really be:
+    // exportOp.setWorkgroupSizeAttr(newAttr);
     exportOp->setAttr(exportOp.getWorkgroupSizeAttrName(), newAttr);
   }
 
@@ -377,7 +418,8 @@ transform_dialect::MapNestedForallToGpuThreadsOp::applyToOne(
           getAsIndexOpFoldResult(ctx, workgroupSize),
           /*syncAfterDistribute=*/true, transformOp, warpMappingAttributes);
 
-      // If any warp mapping attribute remains, interrupt and fail hard.
+      // If any warp mapping attribute remains, interrupt and
+      // fail hard.
       if (failed(res))
         return checkNoMoreWarpMappingAttributes(forallOp,
                                                 warpMappingAttributes);
@@ -493,19 +535,21 @@ static FailureOr<VectorDistributionResult> rewriteScfIfAsWarpExecuteOnLane0(
       isThreadIdxxZeroPredicate(ifOp);
   if (failed(maybeThreadIdxxOp)) return failure();
 
-  // All the code below will be executed on a single warp given a fixed
-  // (threadIdxy, threadIdxz).
-  // Note, we reuse `maybeThreadIdxxOp` here because we later want to replace
-  // this op instance by 0 without relying on CSE or canonicalizations.
+  // All the code below will be executed on a single warp given a
+  // fixed (threadIdxy, threadIdxz). Note, we reuse
+  // `maybeThreadIdxxOp` here because we later want to replace this
+  // op instance by 0 without relying on CSE or canonicalizations.
   Value threadIdxx = *maybeThreadIdxxOp;
 
   assert(workgroupSizeX % warpSize == 0);
   if (workgroupSizeX != warpSize) {
-    // Add a guard for `threadIdxx < warp size` around the WarpExecuteOnLane0Op.
+    // Add a guard for `threadIdxx < warp size` around the
+    // WarpExecuteOnLane0Op.
     Value predicate = rewriter.create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ult, threadIdxx,
         rewriter.create<arith::ConstantIndexOp>(loc, warpSize));
-    // Note: return-less IfOp is built with a terminator, no need to add one.
+    // Note: return-less IfOp is built with a terminator, no need to
+    // add one.
     auto newIfOp =
         rewriter.create<scf::IfOp>(loc, predicate, /*withElseRegion=*/false);
     rewriter.setInsertionPointToStart(&newIfOp.getThenRegion().front());
@@ -513,7 +557,8 @@ static FailureOr<VectorDistributionResult> rewriteScfIfAsWarpExecuteOnLane0(
   auto warpOp = rewriter.create<vector::WarpExecuteOnLane0Op>(
       loc, TypeRange(), threadIdxx, warpSize);
 
-  // Move the code from the previous ifOp to the WarpExecuteOnLane0Op.
+  // Move the code from the previous ifOp to the
+  // WarpExecuteOnLane0Op.
   Block &sourceBlock = ifOp.getThenRegion().front();
   Block &targetBlock = warpOp.getWarpRegion().front();
   Block::iterator insertionPoint = targetBlock.begin();
@@ -530,8 +575,8 @@ static FailureOr<VectorDistributionResult> rewriteScfIfAsWarpExecuteOnLane0(
   // This simple rewrite propagates zero in lieu of laneId within the
   // warp_execute_on_lane_0 op.
   // Atm, this **must** occur before any hoisting of code.
-  // TODO: Replace this by a more robust scoped SCCP that will make it more
-  // robust re. hoisting.
+  // TODO: Replace this by a more robust scoped SCCP that will make
+  // it more robust re. hoisting.
   (void)replaceAllUsesOfLaneWithin(rewriter, warpOp);
 
   // Hoist the scalar code outside of the warp region.
@@ -561,9 +606,12 @@ transform_dialect::VectorToWarpExecuteOnLane0Op::applyToOne(
   if (!isa<HAL::ExecutableOp, HAL::ExecutableVariantOp>(state.getTopLevel())) {
     results.assign(1, nullptr);
     return emitDefaultSilenceableFailure(state.getTopLevel())
-           << "requires HAL::ExecutableOp or HAL::ExecutableVariantOp toplevel "
-              "so that IR is properly isolated. This is required so we can "
-              "safely inspect the HAL::ExecutableExportOp under multi-threaded "
+           << "requires HAL::ExecutableOp or "
+              "HAL::ExecutableVariantOp toplevel "
+              "so that IR is properly isolated. This is required so "
+              "we can "
+              "safely inspect the HAL::ExecutableExportOp under "
+              "multi-threaded "
               "pass assumptions.";
   }
 
@@ -573,29 +621,35 @@ transform_dialect::VectorToWarpExecuteOnLane0Op::applyToOne(
   HAL::ExecutableExportOp exportOp =
       getExecutableExportOpForFunc(halExecutableVariantOp, funcOp);
   if (!halExecutableVariantOp || !funcOp || !exportOp) {
-    // Return a silenceable failure and set the expected 1 result to nullptr.
+    // Return a silenceable failure and set the expected 1 result to
+    // nullptr.
     results.assign(1, nullptr);
     return emitDefaultSilenceableFailure(target)
-           << "export op is missing --- the transform is not applied";
+           << "export op is missing --- the transform is not "
+              "applied";
   }
 
   Optional<ArrayAttr> maybeAttr = exportOp.getWorkgroupSize();
   // TODO: Pervasive 3 constant in IREE.
   if (!maybeAttr || maybeAttr->size() != 3) {
-    // Return a silenceable failure and set the expected 1 result to nullptr.
+    // Return a silenceable failure and set the expected 1 result to
+    // nullptr.
     results.assign(1, nullptr);
     return emitDefaultSilenceableFailure(target)
-           << "export op must have workgroup_size attribute set with 3 entries "
+           << "export op must have workgroup_size attribute set "
+              "with 3 entries "
               "--- the transform is not applied";
   }
 
   int64_t workgroupSizeX = (*maybeAttr)[0].cast<IntegerAttr>().getInt();
   int64_t warpSize = getWarpSize();
   if (workgroupSizeX % warpSize != 0) {
-    // Return a silenceable failure and set the expected 1 result to nullptr.
+    // Return a silenceable failure and set the expected 1 result to
+    // nullptr.
     results.assign(1, nullptr);
     return emitDefaultSilenceableFailure(target)
-           << "vector distribution requires workgroup size for x to be a "
+           << "vector distribution requires workgroup size for x to "
+              "be a "
            << "multiple of the warp size: " << workgroupSizeX << " vs "
            << warpSize << " --- the transform is not applied";
   }
@@ -605,10 +659,12 @@ transform_dialect::VectorToWarpExecuteOnLane0Op::applyToOne(
       rewriteScfIfAsWarpExecuteOnLane0(rewriter, target->getLoc(), target,
                                        workgroupSizeX, warpSize);
   if (failed(vectorDistributionResult)) {
-    // Return a silenceable failure and set the expected 1 result to nullptr.
+    // Return a silenceable failure and set the expected 1 result to
+    // nullptr.
     results.assign(1, nullptr);
     return emitDefaultSilenceableFailure(target)
-           << "scf::ifOp needs to be predicated on threadIdx.x == 0 --- the "
+           << "scf::ifOp needs to be predicated on threadIdx.x == 0 "
+              "--- the "
               "transform is not applied";
   }
   results.push_back(vectorDistributionResult->warpOp);
@@ -714,15 +770,15 @@ struct WarpOpLoad : public OpRewritePattern<vector::WarpExecuteOnLane0Op> {
     OpBuilder::InsertionGuard g(rewriter);
     rewriter.setInsertionPointAfter(warpOp);
     // TODO: generalize this.
-    // options.warpSyncronizationFn currently must take a WarpExecuteOnLane0Op
-    // which we don't have here.
+    // options.warpSyncronizationFn currently must take a
+    // WarpExecuteOnLane0Op which we don't have here.
     rewriter.create<gpu::BarrierOp>(load.getLoc());
     Value newRead = rewriter.create<memref::LoadOp>(
         load.getLoc(), distributedVal.getType(), load.getMemref(), indices);
 
-    // The result type of WarpExecuteOnLane0Op may or may not match the yielded
-    // type depending on whether the op has "broadcast" behavior (see the doc
-    // of WarpExecuteOnLane0Op).
+    // The result type of WarpExecuteOnLane0Op may or may not match
+    // the yielded type depending on whether the op has "broadcast"
+    // behavior (see the doc of WarpExecuteOnLane0Op).
     for (OpOperand &use : distributedVal.getUses()) {
       rewriter.startRootUpdate(use.getOwner());
       Value replacement = newRead;
@@ -754,8 +810,8 @@ struct HoistSharedMemoryAlloc : public OpRewritePattern<memref::AllocOp> {
     auto warpParent = alloc->getParentOfType<vector::WarpExecuteOnLane0Op>();
     if (!warpParent) return failure();
     alloc->moveBefore(warpParent);
-    // Conservatively move the dealloc after the warpOp. This may extend the
-    // liverange of the allocation but is always correct.
+    // Conservatively move the dealloc after the warpOp. This may
+    // extend the liverange of the allocation but is always correct.
     for (Operation *user : alloc->getUsers()) {
       if (isa<memref::DeallocOp>(user)) user->moveAfter(warpParent);
     }
@@ -848,7 +904,8 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
     transform::TransformState &state) {
   if (!target->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
     target->emitOpError(
-        "applies only to isolated-from-above targets because it needs to apply "
+        "applies only to isolated-from-above targets because it "
+        "needs to apply "
         "patterns greedily");
     return emitDefaultDefiniteFailure(target);
   }
@@ -857,8 +914,8 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
   // automatically get listening capabilities.
 
   MLIRContext *ctx = target->getContext();
-  // MultiReduction lowering is necessary until we have explicit support for
-  // distributing that op.
+  // MultiReduction lowering is necessary until we have explicit
+  // support for distributing that op.
   RewritePatternSet preProcessingPatterns(ctx);
   populateMultiReductionLoweringPatterns(target, preProcessingPatterns,
                                          /*benefit=*/1);
@@ -872,8 +929,10 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
   }
 
   RewritePatternSet patterns(ctx);
-  populateVectorTransferWriteDistribution(target, patterns, /*benefit=*/2);
-  populatePropagateVectorDistribution(target, patterns, /*benefit=*/1);
+  populateVectorTransferWriteDistribution(target, patterns,
+                                          /*benefit=*/2);
+  populatePropagateVectorDistribution(target, patterns,
+                                      /*benefit=*/1);
   if (failed(applyPatternsAndFoldGreedily(target, std::move(patterns)))) {
     return mlir::emitDefiniteFailure(
         target, "warp distribution patterns failed to apply");
@@ -883,7 +942,8 @@ transform_dialect::VectorWarpDistributionOp::applyToOne(
   vector::WarpExecuteOnLane0LoweringOptions options;
   options.warpAllocationFn = allocateGlobalSharedMemory;
   options.warpSyncronizationFn = warpSyncronizationFn;
-  populateWarpExecuteOnLane0ToScf(target, endPatterns, options, /*benefit=*/0);
+  populateWarpExecuteOnLane0ToScf(target, endPatterns, options,
+                                  /*benefit=*/0);
   if (failed(applyPatternsAndFoldGreedily(target, std::move(endPatterns)))) {
     return mlir::emitDefiniteFailure(
         target, "warp execute on lane 0 to scf patterns failed to apply");
@@ -906,7 +966,8 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
     transform::TransformState &state) {
   if (!target->hasTrait<OpTrait::IsIsolatedFromAbove>()) {
     target->emitOpError(
-        "applies only to isolated-from-above targets because it needs to apply "
+        "applies only to isolated-from-above targets because it "
+        "needs to apply "
         "patterns greedily");
     return emitDefaultDefiniteFailure(target);
   }
@@ -926,8 +987,8 @@ transform_dialect::VectorToMMAConversionOp::applyToOne(
   MLIRContext *ctx = target->getContext();
 
   // Unrolling to native vector size must have previously occurred.
-  // TODO: Add pattern to propagate the extract through the scf.for ops.
-  // Convert slice of contract operations to mma_sync/wmma ops.
+  // TODO: Add pattern to propagate the extract through the scf.for
+  // ops. Convert slice of contract operations to mma_sync/wmma ops.
   RewritePatternSet patterns(ctx);
   mlir::vector::populateCastAwayVectorLeadingOneDimPatterns(patterns);
   populatePrepareVectorToMMAPatterns(patterns, getUseMmaSync());
