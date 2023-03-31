@@ -551,6 +551,10 @@ void addGPUTransformDialectPasses(OpPassManager &passManager) {
   //      schedule once applied.
   //   2. if transform.do_not_dce_operands ops are introduced.
   passManager.addPass(createDropSchedulePass());
+  //   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+  //       createGPUReduceSharedMemoryBankConflicts());
+  //   passManager.nest<ModuleOp>().addNestedPass<func::FuncOp>(
+  //       createLLVMGPUPackSharedMemoryAlloc());
 }
 
 void buildLLVMGPUTransformPassPipeline(OpPassManager &pm, bool useROCM) {
