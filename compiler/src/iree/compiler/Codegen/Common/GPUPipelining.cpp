@@ -47,16 +47,16 @@ static bool hasDefaultOrHALAddressSpace(MemRefType memrefType) {
 /// Returns a new predicated operation to support unpeeled epilogue. Unpeeled
 /// epilogue needs to handle the last iterations within the mainloop which
 /// requires predicating operations, for e.g., OOB global memory access. This
-/// helper function predicates operations (where predication is avialable),
+/// helper function predicates operations (where predication is available),
 /// checks if unpredicated operations are side-effect free and acceptable to
 /// execute speculatively.
 static Operation* replaceOpWithPredicatedOp(RewriterBase& rewriter,
                                             Operation* op, Value pred) {
   // Predication is only supported for AsyncCopyOp. Thus, for operations which
-  // are *not* AsyncCopyOp additional checks are requrired in order to be issued
+  // are *not* AsyncCopyOp additional checks are required in order to be issued
   // speculatively.
   if (!isa<nvgpu::DeviceAsyncCopyOp>(op)) {
-    // Return/execute the op if it is a side effect free.
+    // Return/execute the op if it is side-effect free.
     if (mlir::isMemoryEffectFree(op)) return op;
     // Return/execute the op if it is barrier, commit group, or ldmatrix op.
     if (isa<gpu::BarrierOp, nvgpu::DeviceAsyncCreateGroupOp, nvgpu::LdMatrixOp,
@@ -560,7 +560,7 @@ static void getNvidiaAmpereTensorCorePipeline(
   }
 
   // Prints the mainloop schedule generated for NVIDIA Ampere through native
-  // Tensor Core operations (asyncronous copy, load matrix, and mma.sync).
+  // Tensor Core operations (asynchronous copy, load matrix, and mma.sync).
   debugMainloopSchedule(mainloop, numStages, ops);
 }
 
@@ -599,8 +599,8 @@ static FailureOr<scf::ForOp> applyPipelining(
   options.getScheduleFn = getSchedule;
   options.annotateFn = setAnnotation;
 
-  // Use un-peeled epilogue (i.e. epiloguePeeling=flase) only when predication
-  // is avialable a.k.a. AsyncCopyOp.
+  // Use un-peeled epilogue (i.e. epiloguePeeling=false) only when predication
+  // is available a.k.a. AsyncCopyOp.
   if (!epiloguePeeling) {
     options.peelEpilogue = false;
     options.predicateFn = [](RewriterBase& rewriter, Operation* op,
