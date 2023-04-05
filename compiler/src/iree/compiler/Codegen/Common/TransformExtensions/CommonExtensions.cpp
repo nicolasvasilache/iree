@@ -1160,12 +1160,33 @@ static LogicalResult gpuComprehensiveBufferizeDeallocationFn(OpBuilder &builder,
 static LogicalResult gpuComprehensiveBufferizeCopyFn(OpBuilder &builder,
                                                      Location loc, Value from,
                                                      Value to) {
+  // Logic matching IREE pass pipeline to insert barriers around copy to/from
+  // shared memory. Technically we should insert barriers around each copy but
+  // bufferization sometimes emits copies between global memory buffers that are
+  // later optimized.
+  auto fromType = from.getType().cast<MemRefType>();
+  auto toType = to.getType().cast<MemRefType>();
+  bool needsBarrier = false;
+  if (auto attr =
+          fromType.getMemorySpace().dyn_cast_or_null<gpu::AddressSpaceAttr>()) {
+    if (attr.getValue() == gpu::GPUDialect::getWorkgroupAddressSpace())
+      needsBarrier = true;
+  }
+  if (auto attr =
+          toType.getMemorySpace().dyn_cast_or_null<gpu::AddressSpaceAttr>()) {
+    if (attr.getValue() == gpu::GPUDialect::getWorkgroupAddressSpace())
+      needsBarrier = true;
+  }
+  if (needsBarrier) builder.create<gpu::BarrierOp>(loc);
   // TODO: ideally we should use linalg.copy which was recently reintroduced
   // as an OpDSL named op. However, IREE-specific patterns to cleanup spurious
   // post-bufferization copies do not trigger properly.
   // So we keep using `createLinalgCopyOp` which builds a GenericOp.
   // builder.create<linalg::CopyOp>(loc, from, to);
   mlir::iree_compiler::createLinalgCopyOp(builder, loc, from, to);
+  if (needsBarrier) {
+    builder.create<gpu::BarrierOp>(loc);
+  }
   return success();
 }
 
