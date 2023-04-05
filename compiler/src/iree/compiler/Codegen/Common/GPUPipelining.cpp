@@ -85,12 +85,11 @@ static Operation* replaceOpWithPredicatedOp(RewriterBase& rewriter,
 
   // Create srcElement Value based on the pred.
   // The next few lins generate the below code:
-  // srcElement = (pred) ?  dstElements : 0;
-  Value dstElements =
-      rewriter.create<arith::ConstantOp>(loc, asyncCopyOp.getDstElementsAttr());
-  Value c0Index = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-  auto srcElements =
-      rewriter.create<arith::SelectOp>(loc, pred, dstElements, c0Index);
+  //   srcElement = (pred) ?  dstElements : 0;
+  // Value c0Index = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  // Value srcElements =
+  //     rewriter.create<arith::SelectOp>(loc, pred, asyncCopyOp.getSrcElements(), c0Index);
+  Value srcElements = asyncCopyOp.getSrcElements();
   auto asyncCopyZfillOp = rewriter.create<nvgpu::DeviceAsyncCopyOp>(
       loc, nvgpu::DeviceAsyncTokenType::get(asyncCopyOp.getContext()),
       asyncCopyOp.getDst(), asyncCopyOp.getDstIndices(), asyncCopyOp.getSrc(),
@@ -601,13 +600,14 @@ static FailureOr<scf::ForOp> applyPipelining(
 
   // Use un-peeled epilogue (i.e. epiloguePeeling=false) only when predication
   // is available a.k.a. AsyncCopyOp.
-  if (!epiloguePeeling) {
-    options.peelEpilogue = false;
-    options.predicateFn = [](RewriterBase& rewriter, Operation* op,
-                             Value pred) {
-      return replaceOpWithPredicatedOp(rewriter, op, pred);
-    };
-  }
+  // if (!epiloguePeeling) {
+  //   options.peelEpilogue = false;
+  //   options.predicateFn = [](RewriterBase& rewriter, Operation* op,
+  //                            Value pred) {
+  //     return replaceOpWithPredicatedOp(rewriter, op, pred);
+  //   };
+  // }
+  options.peelEpilogue = true;
   scf::ForLoopPipeliningPattern pattern(options, forOp->getContext());
   IRRewriter rewriter(forOp->getContext());
   rewriter.setInsertionPoint(forOp);

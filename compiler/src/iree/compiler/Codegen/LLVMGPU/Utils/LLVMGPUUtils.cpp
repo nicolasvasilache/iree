@@ -8,8 +8,8 @@
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Debug.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/Visitors.h"
@@ -22,10 +22,11 @@ using namespace mlir;
 namespace mlir {
 namespace iree_compiler {
 
+// TODO: Move on transfer store and stop duplicating functionality.
 static bool isContiguousStore(Operation* write) {
   if (auto transferWrite = dyn_cast<vector::TransferWriteOp>(write)) {
     if (!transferWrite.getPermutationMap().isMinorIdentity() ||
-        !transferWrite.isDimInBounds(0)) {
+        (transferWrite.getTransferRank() > 0 && !transferWrite.isDimInBounds(0))) {
       return false;
     }
     return true;
@@ -36,9 +37,11 @@ static bool isContiguousStore(Operation* write) {
   return false;
 }
 
+// TODO: Move on transfer store and stop duplicating functionality.
 static bool isContiguousRead(Operation* read) {
   if (auto transferRead = dyn_cast<vector::TransferReadOp>(read)) {
-    if (!transferRead.isDimInBounds(0) ||
+    if ((transferRead.getTransferRank() > 0 &&
+         !transferRead.isDimInBounds(0)) ||
         !transferRead.getPermutationMap().isMinorIdentity()) {
       return false;
     }
@@ -91,24 +94,25 @@ static Operation::operand_range getIndices(Operation* op) {
 /// Hack masking, prevents out of bound access.
 static Value getReadMask(RewriterBase& rewriter, Operation* read) {
   auto transferRead = dyn_cast<vector::TransferReadOp>(read);
-  if(!transferRead)
-    return Value();
+  if (!transferRead) return Value();
   Value mask = transferRead.getMask();
-  if(!mask)
-    return Value();
+  if (!mask) return Value();
   Location loc = transferRead.getLoc();
   OpBuilder::InsertionGuard guard(rewriter);
   rewriter.setInsertionPoint(read);
-  int64_t numEl = transferRead.getVectorType().getNumElements();
-  Value numElValue =
-      rewriter.create<arith::ConstantIndexOp>(loc, numEl);
-  for (unsigned int i = 0; i < numEl; i++) {
-    Value cnd = rewriter.create<vector::ExtractOp>(loc, mask, numEl - i - 1);
-    Value el =
-      rewriter.create<arith::ConstantIndexOp>(loc, numEl - i - 1);
-    numElValue = rewriter.create<arith::SelectOp>(loc, cnd, numElValue, el);
-  }
-  return numElValue;
+  // int64_t numEl = transferRead.getVectorType().getNumElements();
+  // Value numElValue = rewriter.create<arith::ConstantIndexOp>(loc, numEl);
+  // for (unsigned int i = 0; i < numEl; i++) {
+  //   Value cnd = rewriter.create<vector::ExtractOp>(loc, mask, numEl - i - 1);
+  //   Value el = rewriter.create<arith::ConstantIndexOp>(loc, numEl - i - 1);
+  //   numElValue = rewriter.create<arith::SelectOp>(loc, cnd, numElValue, el);
+  // }
+  // numElValue = rewriter.create<arith::SelectOp>(loc, cnd, numElValue, el);
+  // return numElValue;
+  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+  Value cnd = rewriter.create<vector::ExtractOp>(loc, mask, 0);
+  return rewriter.create<arith::SelectOp>(loc, cnd, one, zero);
 }
 
 void createAsyncGroups(RewriterBase& rewriter, func::FuncOp funcOp,
