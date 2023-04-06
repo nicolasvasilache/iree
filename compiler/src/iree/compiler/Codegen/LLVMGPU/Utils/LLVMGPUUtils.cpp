@@ -115,10 +115,15 @@ static Value getReadMask(RewriterBase& rewriter, Operation* read) {
   return rewriter.create<arith::SelectOp>(loc, cnd, one, zero);
 }
 
+bool isZero(Value v) {
+  return v.getDefiningOp<arith::ConstantOp>() != nullptr;
+}
+
 void createAsyncGroups(RewriterBase& rewriter, func::FuncOp funcOp,
                        bool useMMASync) {
   LLVM_DEBUG(DBGS() << "Start asyncGroups: useMMASync=" << useMMASync << "\n");
   llvm::SmallSetVector<Operation*, 16> copyToSharedMem;
+  llvm::SmallVector<Operation*> fillZero;
   // Look for all the copy that can be converted to async copy ops.
   funcOp.walk([&](Operation* writeOp) {
     if (!isContiguousStore(writeOp)) {
@@ -141,6 +146,11 @@ void createAsyncGroups(RewriterBase& rewriter, func::FuncOp funcOp,
                                  gpu::GPUDialect::getWorkgroupAddressSpace()) {
       LLVM_DEBUG(DBGS() << "----address space is not workgroup -> Skip \n");
       return WalkResult::advance();
+    }
+    if(isZero(vectorVal)) {
+           writeOp->dump();
+      fillZero.push_back(writeOp);
+      WalkResult::advance();      
     }
     Operation* readOp = vectorVal.getDefiningOp();
     if (readOp == nullptr || !isContiguousRead(readOp)) {
@@ -226,7 +236,10 @@ void createAsyncGroups(RewriterBase& rewriter, func::FuncOp funcOp,
                                               nullptr);
     // Clean up old stores.
     for (Operation* writeOp : group) rewriter.eraseOp(writeOp);
+
   }
+      // Hack delete fill ops
+    for (Operation* writeOp : fillZero) rewriter.eraseOp(writeOp);
 }
 
 }  // namespace iree_compiler
