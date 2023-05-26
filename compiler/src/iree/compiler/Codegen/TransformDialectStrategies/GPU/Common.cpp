@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/Common.h"
+#include <tuple>
 
 #include "iree-dialects/Dialect/LinalgTransform/StructuredTransformOpsExt.h"
 #include "iree/compiler/Codegen/Common/TransformExtensions/CommonExtensions.h"
@@ -13,6 +14,7 @@
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/MatmulTensorCoreStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/SmallReductionStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/StagedReductionStrategy.h"
+#include "iree/compiler/Codegen/TransformDialectStrategies/GPU/Strategies.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -61,6 +63,7 @@ using iree_compiler::gpu::AbstractGemmLikeStrategy;
 using iree_compiler::gpu::build1DSplittingStrategyWithOptionalThreadMapping;
 using iree_compiler::gpu::buildCommonTrailingStrategy;
 using iree_compiler::gpu::buildMapToBlockAndThreads;
+using iree_compiler::gpu::buildPadStrategy;
 using iree_compiler::gpu::buildSmallReductionStrategy;
 using iree_compiler::gpu::buildStagedReductionStrategy;
 using iree_compiler::gpu::GPUModel;
@@ -373,7 +376,35 @@ Value mlir::iree_compiler::gpu::buildHoistOutputPaddingOp(
 /// vectorization of the result.
 /// This amounts to injecting knowledge about future transformations without
 /// adding leaky semantics.
-Value mlir::iree_compiler::gpu::buildDistributeOnePadOrCopy(
+std::tuple<Value, Value>  mlir::iree_compiler::gpu::buildDistributeOnePadOrCopyWithTileSizes(
+    ImplicitLocOpBuilder &b, Value variantH, Value copyOpH,
+    ArrayRef<int64_t> tileSizes, ArrayRef<Attribute> threadDimMapping,
+    bool foldIfBranch) {
+  TileToForallAndFuseAndDistributeResult res =
+      buildTileFuseDistToForallWithTileSizes(
+          /*builder=*/b,
+          /*isolatedParentOpH=*/variantH,
+          /*rootH=*/copyOpH,
+          /*opsToFuseH=*/{},
+          /*tileSizes=*/
+          getAsOpFoldResult(b.getI64ArrayAttr(tileSizes)),
+          /*threadDimMapping=*/
+          b.getArrayAttr(threadDimMapping));
+  if (foldIfBranch) {
+    Value ifOpH = b.create<transform::MatchOp>(res.forallH,
+                                               scf::IfOp::getOperationName());
+    b.create<transform::TakeAssumedBranchOp>(
+        ifOpH, /*takeElseBranch=*/b.getUnitAttr());
+  }
+  return std::make_tuple(res.tiledOpH, res.forallH);
+}
+
+/// Helper function to distribute one pad or copy operation.
+/// Note: When `foldIfBranch` is true, one must later perform masked
+/// vectorization of the result.
+/// This amounts to injecting knowledge about future transformations without
+/// adding leaky semantics.
+Value mlir::iree_compiler::gpu::buildDistributeOnePadOrCopyWithNumThreads(
     ImplicitLocOpBuilder &b, Value variantH, Value copyOpH,
     ArrayRef<int64_t> numThreads, ArrayRef<Attribute> threadDimMapping,
     bool foldIfBranch) {
@@ -398,7 +429,7 @@ Value mlir::iree_compiler::gpu::buildDistributeOnePadOrCopy(
 
 /// Distribute the explicit copies involved in a matmul operation
 /// `paddedMatmulOpH`.
-std::tuple<Value, Value, Value> mlir::iree_compiler::gpu::buildDistributeCopies(
+std::tuple<Value, Value, Value> mlir::iree_compiler::gpu::buildDistributeMatmulCopies(
     ImplicitLocOpBuilder &b, Value variantH, Value paddedMatmulOpH,
     const AbstractGemmLikeStrategy &strategy) {
   // Explicitly materialize the parent parallel_insert into a copy to avoid late
@@ -416,19 +447,19 @@ std::tuple<Value, Value, Value> mlir::iree_compiler::gpu::buildDistributeCopies(
 
   AbstractGemmLikeStrategy::MappingInfo lhsCopyMapping =
       strategy.lhsCopyMapping();
-  Value lhsCopyOpH = buildDistributeOnePadOrCopy(
+  Value lhsCopyOpH = buildDistributeOnePadOrCopyWithNumThreads(
       b, variantH, lhsH, /*numThreads=*/lhsCopyMapping.numThreads,
       /*threadDimMapping=*/lhsCopyMapping.threadMapping, /*foldIfBranch=*/true);
 
   AbstractGemmLikeStrategy::MappingInfo rhsCopyMapping =
       strategy.rhsCopyMapping();
-  Value rhsCopyOpH = buildDistributeOnePadOrCopy(
+  Value rhsCopyOpH = buildDistributeOnePadOrCopyWithNumThreads(
       b, variantH, rhsH, /*numThreads=*/rhsCopyMapping.numThreads,
       /*threadDimMapping=*/rhsCopyMapping.threadMapping, /*foldIfBranch=*/true);
 
   AbstractGemmLikeStrategy::MappingInfo resCopyMapping =
       strategy.resCopyMapping();
-  copyBackOpH = buildDistributeOnePadOrCopy(
+  copyBackOpH = buildDistributeOnePadOrCopyWithNumThreads(
       b, variantH, copyBackOpH,
       /*numThreads=*/resCopyMapping.numThreads,
       /*threadDimMapping=*/rhsCopyMapping.threadMapping);
@@ -447,11 +478,10 @@ void mlir::iree_compiler::gpu::buildMatmulVectorization(
   // Also, no canonicalization is allowed after vector masking and before we
   // lower the masks: masks are currently quite brittle and do not like
   // canonicalization or anything else that may insert an op in their region.
-  {
-    ApplyPatternsOpPatterns configuration;
-    variantH = iree_compiler::buildCanonicalizationAndEnablingTransforms(
-        b, configuration, variantH);
-  }
+  ApplyPatternsOpPatterns configuration;
+  variantH = iree_compiler::buildCanonicalizationAndEnablingTransforms(
+      b, configuration, variantH);
+        
   // Apply vector masking.
   AbstractGemmLikeStrategy::MappingInfo lhsCopyMapping =
       strategy.lhsCopyMapping();
@@ -466,23 +496,15 @@ void mlir::iree_compiler::gpu::buildMatmulVectorization(
   b.create<transform::MaskedVectorizeOp>(copyBackOpH, ValueRange(), false,
                                          resCopyMapping.tileSizes);
 
+  // Lower all masked vector transfers at this point, as they make 
+  // canonicalization generate incorrect IR.
   // TODO: don't rematch, apply on the variant op directly.
   Value funcH =
       b.create<transform::MatchOp>(variantH, func::FuncOp::getOperationName());
-  // TODO: avoid functional style transform so we can apply to the variant.
-  funcH = b.create<transform::LowerMaskedTransfersOp>(funcH.getType(), funcH);
-  {
-    ApplyPatternsOpPatterns configuration;
-    configuration.rankReducingLinalg = true;
-    configuration.rankReducingVector = true;
-    b.create<ApplyPatternsOp>(funcH, configuration);
-  }
-  b.create<transform::VectorizeOp>(funcH);
-  {
-    ApplyPatternsOpPatterns configuration;
-    variantH = iree_compiler::buildCanonicalizationAndEnablingTransforms(
-        b, configuration, variantH);
-  }
+  funcH = buildLowerMaskedTransfersAndCleanup(b, funcH);
+  
+  // Apply vectorization + cleanups to what remains.
+  funcH = iree_compiler::buildVectorize(b, funcH, /*applyCleanups=*/true);
 }
 
 /// Build the transform IR to perform conversion to tensor core operations.
@@ -873,9 +895,41 @@ static LogicalResult matchAndSetMatmulStrategy(func::FuncOp entryPoint,
   return success();
 }
 
+static LogicalResult matchAndSetPadStrategy(func::FuncOp entryPoint,
+                                            tensor::PadOp op,
+                                            const GPUModel &gpuModel) {
+  // 1. Match a padOp.
+  StructuredOpMatcher *pad;
+  transform_ext::MatcherContext matcherContext;
+  makePadMatcher(matcherContext, pad);
+  if (!matchPattern(op.getOperation(), *pad)) {
+    LDBG("--Pad strategy fail to match\n");
+    return failure();
+  }
+
+  // 2. Construct the strategy builder.
+  auto strategyBuilder = [&](ImplicitLocOpBuilder &b, Value variant) {
+    return buildPadStrategy(b, variant);
+  };
+
+  // 3. Build strategy embedded into the IR.
+  mlir::iree_compiler::createTransformRegion(entryPoint, strategyBuilder);
+
+  return success();
+}
+
 LogicalResult mlir::iree_compiler::gpu::matchAndSetTransformStrategy(
     func::FuncOp entryPoint, Operation *op, const GPUModel &gpuModel) {
   LDBG("Look up a TD strategy for entryPoint:\n" << entryPoint << "\n");
+  auto padOp = dyn_cast<tensor::PadOp>(op);
+  if (padOp) {
+    if (succeeded(matchAndSetPadStrategy(entryPoint, padOp, gpuModel))) {
+      LDBG("Activate pad strategy\n");
+      return success();
+    }
+    LDBG("Unmatched pad strategy\n");
+    return failure();
+  }
   auto linalgOp = dyn_cast<linalg::LinalgOp>(op);
   if (!linalgOp) {
     LDBG("Not a Linalg op: " << *op << " -> Fail\n");

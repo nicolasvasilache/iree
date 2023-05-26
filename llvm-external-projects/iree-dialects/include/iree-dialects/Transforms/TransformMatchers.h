@@ -821,6 +821,10 @@ void makeConvolutionMatcher(transform_ext::MatcherContext &context,
                             StructuredOpMatcher *&convolutionCapture,
                             MatchedConvolutionCaptures &captures);
 
+/// Create a matcher for tensor.pad(empty())
+void makePadMatcher(transform_ext::MatcherContext &context,
+                            StructuredOpMatcher *&padCapture);
+
 } // namespace transform_ext
 } // namespace mlir
 

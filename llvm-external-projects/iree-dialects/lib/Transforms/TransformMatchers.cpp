@@ -1353,3 +1353,11 @@ void transform_ext::makeConvolutionMatcher(
   StructuredOpMatcher *trailing;
   makeConvolutionMatcher(context, convolutionCapture, fill, trailing, captures);
 }
+
+void transform_ext::makePadMatcher(transform_ext::MatcherContext &context,
+                            StructuredOpMatcher *&padCapture) {
+  // The core part of the matcher is anchored on a particular pad op.
+  auto &pad = m_StructuredOp<tensor::PadOp>(context);
+  padCapture = &pad;
+  pad = pad.allTilableOpsCaptured<func::FuncOp>();
+}
