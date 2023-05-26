@@ -150,6 +150,20 @@ def get_test_shapes(shapes_id: ShapesId):
         TestShape(m=256, k=128, n=512, accumulate=True),
         TestShape(m=256, k=128, n=512, accumulate=False),
     ]
+  if shapes_id == ShapesId.GPU_LARGE:
+    return [
+        # unaligned cases.
+        TestShape(m=457, k=330, n=512, accumulate=False),
+        TestShape(m=457, k=330, n=514, accumulate=False),
+        TestShape(m=438, k=330, n=514, accumulate=False),
+        TestShape(m=540, k=332, n=516, accumulate=False),
+        TestShape(m=1000, k=4, n=512, accumulate=False),
+        TestShape(m=4, k=1000, n=512, accumulate=False),
+        TestShape(m=512, k=1000, n=4, accumulate=False),
+        TestShape(m=512, k=128, n=500, accumulate=False),
+        TestShape(m=457, k=160, n=512, accumulate=False),
+        TestShape(m=512, k=330, n=512, accumulate=False),
+    ]
 
   raise ValueError(shapes_id)
 
