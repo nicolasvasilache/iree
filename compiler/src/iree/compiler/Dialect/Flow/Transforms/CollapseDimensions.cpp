@@ -211,28 +211,28 @@ static LogicalResult collapseDimensions(IRRewriter &rewriter,
 }
 
 void CollapseDimensionsPass::runOnOperation() {
-  // mlir::FunctionOpInterface funcOp = getOperation();
-  // IRRewriter rewriter(funcOp->getContext());
+  mlir::FunctionOpInterface funcOp = getOperation();
+  IRRewriter rewriter(funcOp->getContext());
 
-  // auto walkResult = funcOp->walk([&](DispatchRegionOp regionOp) {
-  //   if (failed(collapseDimensions(rewriter, regionOp)))
-  //     return WalkResult::interrupt();
-  //   return WalkResult::advance();
-  // });
-  // if (walkResult.wasInterrupted()) {
-  //   funcOp->emitOpError("failed in collapsing dimensions pass");
-  //   return signalPassFailure();
-  // }
+  auto walkResult = funcOp->walk([&](DispatchRegionOp regionOp) {
+    if (failed(collapseDimensions(rewriter, regionOp)))
+      return WalkResult::interrupt();
+    return WalkResult::advance();
+  });
+  if (walkResult.wasInterrupted()) {
+    funcOp->emitOpError("failed in collapsing dimensions pass");
+    return signalPassFailure();
+  }
 
-  // RewritePatternSet canonicalizationPatterns(&getContext());
-  // memref::populateResolveRankedShapeTypeResultDimsPatterns(
-  //     canonicalizationPatterns);
-  // tensor::populateFoldTensorEmptyPatterns(canonicalizationPatterns);
-  // if (failed(applyPatternsAndFoldGreedily(
-  //         funcOp, std::move(canonicalizationPatterns)))) {
-  //   funcOp->emitOpError("failed to apply cleanup patterns");
-  //   return signalPassFailure();
-  // }
+  RewritePatternSet canonicalizationPatterns(&getContext());
+  memref::populateResolveRankedShapeTypeResultDimsPatterns(
+      canonicalizationPatterns);
+  tensor::populateFoldTensorEmptyPatterns(canonicalizationPatterns);
+  if (failed(applyPatternsAndFoldGreedily(
+          funcOp, std::move(canonicalizationPatterns)))) {
+    funcOp->emitOpError("failed to apply cleanup patterns");
+    return signalPassFailure();
+  }
 }
 
 std::unique_ptr<InterfacePass<mlir::FunctionOpInterface>>
