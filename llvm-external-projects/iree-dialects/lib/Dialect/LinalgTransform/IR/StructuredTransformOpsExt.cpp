@@ -823,6 +823,55 @@ matmulCallback(transform_ext::MatchCallbackResult &res, Location loc,
   return emitSilenceableFailure(loc) << "failed to match";
 }
 
+
+/// Match callback for a tensor.pad. Matches *the first* occurrence of such pad
+/// within an op associated with the given handle.
+///
+/// Input handles:
+///
+///   - the container op, must be associated with one operation.
+///
+/// Output handles:
+///
+///   - the pad op.
+static DiagnosedSilenceableFailure
+padCallback(transform_ext::MatchCallbackResult &res, Location loc,
+               const mlir::transform::TransformState &state,
+               ValueRange handles) {
+  if (handles.size() != 1 ||
+      !llvm::hasSingleElement(state.getPayloadOps(handles[0]))) {
+    return emitSilenceableFailure(loc)
+           << "expected one handle to one operation";
+  }
+
+  transform_ext::CapturingOpMatcher *pattern;
+  transform_ext::MatchedPadCaptures ignore;
+  transform_ext::MatcherContext matcherContext;
+  makePadMatcher(matcherContext, pattern, ignore);
+
+  Operation *root = *state.getPayloadOps(handles[0]).begin();
+
+  WalkResult walkResult = root->walk([&](Operation *op) {
+    pattern->resetCapture();
+    if (!matchPattern(op, *pattern))
+      return WalkResult::advance();
+
+    // TODO: notify properly.
+    LLVM_DEBUG({
+      DBGS() << "pad:\n";
+      if (pattern->getCaptured())
+        DBGS() << pattern->getCaptured() << "\n";
+    });
+
+    res.addPayloadGroup({pattern->getCaptured()});
+    return WalkResult::interrupt();
+  });
+
+  if (walkResult.wasInterrupted())
+    return DiagnosedSilenceableFailure::success();
+  return emitSilenceableFailure(loc) << "failed to match";
+}
+
 DiagnosedSilenceableFailure transform_ext::RegisterMatchCallbacksOp::apply(
     mlir::transform::TransformResults &results,
     mlir::transform::TransformState &state) {
@@ -834,9 +883,10 @@ DiagnosedSilenceableFailure transform_ext::RegisterMatchCallbacksOp::apply(
                             testValueMatcherCallback);
   registry.registerCallback("_test_shaped_value_matcher_callback",
                             testShapedValueMatcherCallback);
-  registry.registerCallback("reduction", reductionCallback);
   registry.registerCallback("convolution", convolutionCallback);
   registry.registerCallback("matmul", matmulCallback);
+  registry.registerCallback("pad", padCallback);
+  registry.registerCallback("reduction", reductionCallback);
   return DiagnosedSilenceableFailure::success();
 }
 

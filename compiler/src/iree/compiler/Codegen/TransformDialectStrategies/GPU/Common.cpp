@@ -15,6 +15,7 @@
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/MatmulTensorCoreStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/SmallReductionStrategy.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/StagedReductionStrategy.h"
+#include "iree/compiler/Codegen/TransformDialectStrategies/GPU/Strategies.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -63,6 +64,7 @@ using iree_compiler::gpu::AbstractGemmLikeStrategy;
 using iree_compiler::gpu::build1DSplittingStrategyWithOptionalThreadMapping;
 using iree_compiler::gpu::buildCommonTrailingStrategy;
 using iree_compiler::gpu::buildMapToBlockAndThreads;
+using iree_compiler::gpu::buildPadStrategy;
 using iree_compiler::gpu::buildSmallReductionStrategy;
 using iree_compiler::gpu::buildStagedReductionStrategy;
 using iree_compiler::gpu::GPUModel;
@@ -86,7 +88,12 @@ using transform::FuseIntoContainingOp;
 using transform::MatchOp;
 using transform::ScalarizeOp;
 using transform::SequenceOp;
+using transform_ext::CapturingOpMatcher;
 using transform_ext::MatchCallbackOp;
+using transform_ext::MatchedMatmulCaptures;
+using transform_ext::MatchedReductionCaptures;
+using transform_ext::MatchedPadCaptures;
+using transform_ext::MatcherContext;
 using transform_ext::RegisterMatchCallbacksOp;
 using transform_ext::StructuredOpMatcher;
 
@@ -773,8 +780,8 @@ static LogicalResult matchAndSetReductionStrategy(func::FuncOp entryPoint,
 
   // 1. Match a reduction and surrounding ops.
   StructuredOpMatcher *reduction;
-  transform_ext::MatchedReductionCaptures captures;
-  transform_ext::MatcherContext matcherContext;
+  MatchedReductionCaptures captures;
+  MatcherContext matcherContext;
   makeReductionMatcher(matcherContext, reduction, captures);
   if (!matchPattern(op, *reduction)) {
     LDBG("--Reduction strategy failed to match\n");
@@ -819,8 +826,8 @@ static LogicalResult matchAndSetMatmulStrategy(func::FuncOp entryPoint,
   StructuredOpMatcher *fill;
   StructuredOpMatcher *matmul;
   StructuredOpMatcher *trailing;
-  transform_ext::MatchedMatmulCaptures captures;
-  transform_ext::MatcherContext matcherContext;
+  MatchedMatmulCaptures captures;
+  MatcherContext matcherContext;
   makeMatmulMatcher(matcherContext, matmul, fill, trailing, captures);
   if (!matchPattern(op, *matmul)) {
     LDBG("--Matmul strategy fail to match\n");
@@ -896,9 +903,43 @@ static LogicalResult matchAndSetMatmulStrategy(func::FuncOp entryPoint,
   return success();
 }
 
+static LogicalResult matchAndSetPadStrategy(func::FuncOp entryPoint,
+                                            tensor::PadOp op,
+                                            const GPUModel &gpuModel) {
+  // 1. Match a padOp.
+  CapturingOpMatcher *pad;
+  MatchedPadCaptures captures;
+  MatcherContext matcherContext;
+  makePadMatcher(matcherContext, pad, captures);
+
+  if (!matchPattern(op.getOperation(), *pad)) {
+    LDBG("--Pad strategy failed to match\n");
+    return failure();
+  }
+
+  // 2. Construct the strategy builder.
+  auto strategyBuilder = [&](ImplicitLocOpBuilder &b, Value variant) {
+    return buildPadStrategy(b, variant);
+  };
+
+  // 3. Build strategy embedded into the IR.
+  mlir::iree_compiler::createTransformRegion(entryPoint, strategyBuilder);
+
+  return success();
+}
+
 LogicalResult mlir::iree_compiler::gpu::matchAndSetTransformStrategy(
     func::FuncOp entryPoint, Operation *op, const GPUModel &gpuModel) {
   LDBG("Look up a TD strategy for entryPoint:\n" << entryPoint << "\n");
+  auto padOp = dyn_cast<tensor::PadOp>(op);
+  if (padOp) {
+    if (succeeded(matchAndSetPadStrategy(entryPoint, padOp, gpuModel))) {
+      LDBG("Activate pad strategy\n");
+      return success();
+    }
+    LDBG("Unmatched pad strategy\n");
+    return failure();
+  }
   auto linalgOp = dyn_cast<linalg::LinalgOp>(op);
   if (!linalgOp) {
     LDBG("Not a Linalg op: " << *op << " -> Fail\n");

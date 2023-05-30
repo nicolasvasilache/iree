@@ -338,6 +338,33 @@ public:
   CapturingOpMatcher &alternatives(CapturingOpMatcher &first,
                                    CapturingOpMatcher &second);
 
+  //===-------------------------------------------------------------------===//
+  // Constraints on adjacent ops.
+  //===-------------------------------------------------------------------===//
+
+  /// Checks that `matchers` captured all tilable ops nested in `parent` except
+  /// for `linalgOp`. This is an implementation detail of allTilableOpsCaptured.
+  static bool checkAllTilableMatched(Operation *parent,
+                                     Operation * op ,
+                                     ArrayRef<CapturingOpMatcher *> matchers);
+
+  /// Adds a predicate checking that all ops implementing TilingInterface in the
+  /// parent of the given type (e.g., a function or a module) were matched by
+  /// this or nested matchers. This is useful to ensure that the matcher covered
+  /// the entire parent region, not just a parent of it. This predicate **must**
+  /// be added *after* all the other predicates that capture.
+  template <typename OpTy>
+  CapturingOpMatcher &allTilableOpsCaptured() {
+    SmallVector<CapturingOpMatcher *> copy;
+    copy.push_back(this);
+    getAllNested(copy);
+    addPredicate([copy = std::move(copy)](Operation *op) {
+      Operation *parent = op->getParentOfType<OpTy>();
+      return checkAllTilableMatched(parent, op, copy);
+    });
+    return *this;
+  }
+
   //-------------------------------------------------------------------------//
   // Predicates for operands and results.
   //-------------------------------------------------------------------------//
@@ -717,12 +744,6 @@ private:
         });
   }
 
-  /// Checks that `matchers` captured all tilable ops nested in `parent` except
-  /// for `linalgOp`. This is an implementation detail of allTilableOpsCaptured.
-  static bool checkAllTilableMatched(Operation *parent,
-                                     linalg::LinalgOp linalgOp,
-                                     ArrayRef<CapturingOpMatcher *> matchers);
-
   /// Non-template implementations of nested predicate builders for inputs,
   /// outputs and results. Should not be called directly.
   void addInputMatcher(int64_t position,
@@ -878,13 +899,13 @@ struct MatchedMatmulCaptures {
 ///
 /// where trailing and leading are elementwise operations whose presence is
 /// optional. Each matcher will capture the corresponding operation.
-void makeReductionMatcher(transform_ext::MatcherContext &context,
+void makeReductionMatcher(MatcherContext &context,
                           StructuredOpMatcher *&reductionCapture,
                           StructuredOpMatcher *&fillCapture,
                           StructuredOpMatcher *&leadingCapture,
                           StructuredOpMatcher *&trailingCapture,
                           MatchedReductionCaptures &captures);
-void makeReductionMatcher(transform_ext::MatcherContext &context,
+void makeReductionMatcher(MatcherContext &context,
                           StructuredOpMatcher *&reductionCapture,
                           MatchedReductionCaptures &captures);
 
@@ -894,7 +915,7 @@ void makeReductionMatcher(transform_ext::MatcherContext &context,
 ///
 /// where trailing and leading are elementwise operations whose presence is
 /// optional. Each matcher will capture the corresponding operation.
-void makeMatmulMatcher(transform_ext::MatcherContext &matcherContext,
+void makeMatmulMatcher(MatcherContext &matcherContext,
                        StructuredOpMatcher *&matmulCapture,
                        StructuredOpMatcher *&fillCapture,
                        StructuredOpMatcher *&trailingCapture,
@@ -908,10 +929,9 @@ void makeMatmulMatcher(transform_ext::MatcherContext &matcherContext,
 ///  %exp = exp(%sub)
 ///  %sum = reduce_sum(%exp)
 ///  %mul = div(%exp, %%sum)
-void makeSoftmaxMatcher(
-    transform_ext::MatcherContext &context,
-    transform_ext::StructuredOpMatcher *&maxReductionCapture,
-    transform_ext::StructuredOpMatcher *&softmaxRootCapture);
+void makeSoftmaxMatcher(MatcherContext &context,
+                        StructuredOpMatcher *&maxReductionCapture,
+                        StructuredOpMatcher *&softmaxRootCapture);
 
 struct MatchedConvolutionCaptures {
   mlir::linalg::detail::ConvolutionDimensions convolutionDims = {};
@@ -928,14 +948,23 @@ struct MatchedConvolutionCaptures {
 ///
 /// where fill is a FillOp and trailing is an elementwise operation, both of
 /// which is optional. Each matcher will capture the corresponding operation.
-void makeConvolutionMatcher(transform_ext::MatcherContext &context,
+void makeConvolutionMatcher(MatcherContext &context,
                             StructuredOpMatcher *&convolutionCapture,
                             StructuredOpMatcher *&fillCapture,
                             StructuredOpMatcher *&trailingCapture,
                             MatchedConvolutionCaptures &captures);
-void makeConvolutionMatcher(transform_ext::MatcherContext &context,
+void makeConvolutionMatcher(MatcherContext &context,
                             StructuredOpMatcher *&convolutionCapture,
                             MatchedConvolutionCaptures &captures);
+
+struct MatchedPadCaptures {
+  int64_t rank = 0;
+  SmallVector<int64_t> dims = {};
+};
+
+/// Create a matcher for tensor.pad(*).
+void makePadMatcher(MatcherContext &context, CapturingOpMatcher *&padCapture,
+                    MatchedPadCaptures &captures);
 
 } // namespace transform_ext
 } // namespace mlir

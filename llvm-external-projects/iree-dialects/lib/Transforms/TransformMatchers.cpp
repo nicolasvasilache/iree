@@ -93,6 +93,27 @@ void transform_ext::CapturingMatcherBase::resetCapture() {
 // CapturingOpMatcher
 //===---------------------------------------------------------------------===//
 
+bool transform_ext::CapturingOpMatcher::checkAllTilableMatched(
+    Operation *parent, Operation *op,
+    ArrayRef<transform_ext::CapturingOpMatcher *> matchers) {
+  LLVM_DEBUG(DBGS() << "all tilable ops captured");
+  int64_t numTilableOps = 0;
+  if (!parent)
+    return false;
+  parent->walk([&](TilingInterface Op) { ++numTilableOps; });
+
+  llvm::SmallPtrSet<Operation *, 6> matched;
+  for (CapturingOpMatcher *nested : matchers) {
+    if (Operation *captured = nested->getCaptured()) {
+      matched.insert(captured);
+    }
+  }
+
+  // Don't forget to include the root matcher.
+  matched.insert(op);
+  return numTilableOps == matched.size();
+}
+
 bool transform_ext::CapturingOpMatcher::match(Operation *op) {
   auto debugRAII =
       llvm::make_scope_exit([] { LLVM_DEBUG(DBGS() << "-------\n"); });
@@ -1077,27 +1098,6 @@ void transform_ext::StructuredOpMatcher::addResultMatcher(
   });
 }
 
-bool transform_ext::StructuredOpMatcher::checkAllTilableMatched(
-    Operation *parent, linalg::LinalgOp linalgOp,
-    ArrayRef<transform_ext::CapturingOpMatcher *> matchers) {
-  LLVM_DEBUG(DBGS() << "all tilable ops captured");
-  int64_t numTilableOps = 0;
-  if (!parent)
-    return false;
-  parent->walk([&](TilingInterface Op) { ++numTilableOps; });
-
-  llvm::SmallPtrSet<Operation *, 6> matched;
-  for (CapturingOpMatcher *nested : matchers) {
-    if (Operation *captured = nested->getCaptured()) {
-      matched.insert(captured);
-    }
-  }
-
-  // Don't forget to include the root matcher.
-  matched.insert(linalgOp);
-  return numTilableOps == matched.size();
-}
-
 //===-------------------------------------------------------------------===//
 // Constraints on op region.
 //===-------------------------------------------------------------------===//
@@ -1583,4 +1583,15 @@ void transform_ext::makeConvolutionMatcher(
   StructuredOpMatcher *fill;
   StructuredOpMatcher *trailing;
   makeConvolutionMatcher(context, convolutionCapture, fill, trailing, captures);
+}
+
+void transform_ext::makePadMatcher(MatcherContext &context,
+                                   CapturingOpMatcher *&padCapture,
+                                   MatchedPadCaptures &captures) {
+  auto &value = transform_ext::m_ShapedValue(context);
+  value.rank(transform_ext::CaptureRank(captures.rank))
+      .dim(transform_ext::AllDims(), transform_ext::CaptureDims(captures.dims));
+  auto &opMatcher = transform_ext::m_Operation<tensor::PadOp>(context)
+                       .result(0, value).allTilableOpsCaptured<func::FuncOp>();
+  padCapture = &opMatcher;
 }
