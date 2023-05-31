@@ -468,6 +468,11 @@ public:
   StructuredOpMatcher(StructuredOpMatcher &A, StructuredOpMatcher &B);
 
   //===-------------------------------------------------------------------===//
+  // Constraints on op semantics.
+  //===-------------------------------------------------------------------===//
+  StructuredOpMatcher &isaContraction();
+
+  //===-------------------------------------------------------------------===//
   // Constraints on op rank and dims.
   //===-------------------------------------------------------------------===//
   /// Adds a predicate checking that the given rank must be greater than some

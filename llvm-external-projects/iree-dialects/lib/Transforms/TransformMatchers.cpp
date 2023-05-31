@@ -15,6 +15,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Debug.h"
+#include <mlir/Dialect/Linalg/IR/LinalgInterfaces.h>
 #include <mlir/Dialect/Tensor/IR/Tensor.h>
 
 using namespace mlir;
@@ -404,6 +405,19 @@ transform_ext::StructuredOpMatcher::StructuredOpMatcher() {
     LLVM_DEBUG(DBGS() << "is a structured op");
     return isa<linalg::LinalgOp>(op);
   });
+}
+
+//===---------------------------------------------------------------------===//
+// Constraints on op semantics.
+//===---------------------------------------------------------------------===//
+
+transform_ext::StructuredOpMatcher &
+transform_ext::StructuredOpMatcher::isaContraction() {
+  addPredicate([=](linalg::LinalgOp linalgOp) -> bool {
+    LLVM_DEBUG(DBGS() << "isaContraction?");
+    return linalg::isaContractionOpInterface(linalgOp);
+  });
+  return *this;
 }
 
 //===---------------------------------------------------------------------===//
@@ -1322,7 +1336,8 @@ void transform_ext::makeMatmulMatcher(
     transform_ext::StructuredOpMatcher *&fillCapture,
     transform_ext::StructuredOpMatcher *&trailingCapture,
     transform_ext::MatchedMatmulCaptures &captures) {
-  auto &matmul = transform_ext::m_StructuredOp<linalg::MatmulOp>(matcherContext)
+  auto &matmul = transform_ext::m_StructuredOp(matcherContext)
+                     .isaContraction()
                      // Capture op sizes.
                      .dim(AllDims(), CaptureDims(captures.matmulOpSizes))
                      // Capture input/output element types.
