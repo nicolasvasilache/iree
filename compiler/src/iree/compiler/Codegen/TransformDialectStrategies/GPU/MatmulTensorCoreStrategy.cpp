@@ -11,6 +11,7 @@
 #include "iree/compiler/Codegen/LLVMGPU/TransformExtensions/LLVMGPUExtensions.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/Common/Common.h"
 #include "iree/compiler/Codegen/TransformDialectStrategies/GPU/Common.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,6 +28,7 @@ using namespace mlir;
 
 #define DEBUG_TYPE "iree-transform-builder"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 // TODO: significantly better namespacing.
 using iree_compiler::buildPad;
@@ -128,7 +130,7 @@ void MatmulStrategy::initDefaultValues() {
   blockTileSizes = {clBlockTileSizeX, clBlockTileSizeY, clBlockTileSizeZ};
   reductionTileSize = clReductionTileSize;
   numThreads = {clNumThreadsX, clNumThreadsY, clNumThreadsZ};
-  numWarps = {clNumWarpsX, clNumThreadsY, clNumThreadsZ};
+  numWarps = {clNumWarpsX, clNumWarpsY, clNumWarpsZ};
   useAsyncCopies = clUseAsyncCopies;
   useMmaSync = clUseMmaSync;
   pipelineDepth = clPipelineDepth;
@@ -141,6 +143,16 @@ void MatmulStrategy::initDefaultValues() {
 }
 
 LLVM_DUMP_METHOD void MatmulStrategy::dump() const { print(llvm::errs()); }
+
+static llvm::raw_ostream &printMappingInfo(
+    llvm::raw_ostream &os, const MatmulStrategy::MappingInfo &mapping) {
+  os << "MappingInfo{";
+  llvm::interleaveComma(mapping.numThreads, os << "numThreads: {");
+  llvm::interleaveComma(mapping.tileSizes, os << "}, tileSizes: {");
+  llvm::interleaveComma(mapping.threadMapping, os << "}, threadMapping: {");
+  os << "}}";
+  return os;
+}
 
 void MatmulStrategy::print(llvm::raw_ostream &os) const {
   os << "\n--- Matmul strategy ---\n";
@@ -171,10 +183,20 @@ void MatmulStrategy::print(llvm::raw_ostream &os) const {
     isFirst = false;
   }
   os << "}\n";
-
   os << "- use async copies: " << useAsyncCopies << '\n';
   os << "- use mma sync: " << useMmaSync << '\n';
   os << "- pipeline depth: " << pipelineDepth << '\n';
+
+  os << "\n-- Derived quantities --\n";
+  os << "- lhs copy:\n";
+  os << "    -> vector size (num elements): " << lhsCopyVectorSize() << '\n';
+  printMappingInfo(os << "    -> ", lhsCopyMapping()) << '\n';
+  os << "- rhs copy:\n";
+  os << "    -> vector size (num elements): " << rhsCopyVectorSize() << '\n';
+  printMappingInfo(os << "    -> ", rhsCopyMapping()) << '\n';
+  os << "- res copy:\n";
+  os << "    -> vector size (num elements): " << resCopyVectorSize() << '\n';
+  printMappingInfo(os << "    -> ", resCopyMapping()) << '\n';
 }
 
 static std::tuple<Value, Value, Value, Value>
@@ -212,6 +234,7 @@ buildMatmulStrategyBlockDistribution(ImplicitLocOpBuilder &b, Value variantH,
 
 void iree_compiler::gpu::buildMatmulTensorCoreStrategy(
     ImplicitLocOpBuilder &b, Value variantH, const MatmulStrategy &strategy) {
+  LLVM_DEBUG(strategy.print(DBGS());
   assert(strategy.totalNumThreads() ==
              strategy.totalNumWarps() * kCudaWarpSize &&
          "Number of threads specified by warps must match total number of "
@@ -284,14 +307,16 @@ void iree_compiler::gpu::buildMatmulTensorCoreStrategy(
 
   if (strategy.useAsyncCopies) {
     // Step 10. Multi-buffering.
-    buildMultiBuffering(b, funcH, strategy);
+    if (strategy.pipelineDepth > 1)
+      buildMultiBuffering(b, funcH, strategy);
 
     // Step 11. Convert to async copies.
     // TODO: avoid consuming handles and returning here.
     funcH = buildConvertToAsyncCopies(b, funcH, strategy);
 
     // Step 12. Pipeline shared memory copies.
-    buildPipelineSharedMemoryCopies(b, funcH, strategy);
+    if (strategy.pipelineDepth > 1)
+        buildPipelineSharedMemoryCopies(b, funcH, strategy);
   }
 
   // Step 13. Late lowerings and cleanups.

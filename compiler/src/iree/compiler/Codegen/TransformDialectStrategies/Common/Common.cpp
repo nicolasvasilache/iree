@@ -21,6 +21,7 @@ using namespace mlir;
 
 #define DEBUG_TYPE "iree-transform-builder"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "]: ")
+#define LDBG(X) LLVM_DEBUG(DBGS() << X << "\n")
 
 // TODO: significantly better namespacing.
 using iree_compiler::IREE::transform_dialect::ApplyBufferOptimizationsOp;
@@ -104,9 +105,8 @@ void mlir::iree_compiler::createTransformRegion(
         b.create<transform::YieldOp>(loc);
       });
   (void)sequence;
-  LLVM_DEBUG(DBGS() << "transformation script:\n");
-  LLVM_DEBUG(DBGS() << "verification: " << sequence.verify().succeeded()
-                    << "\n");
+  LDBG("transformation script:\n");
+  LDBG("verification: " << sequence.verify().succeeded() << "\n");
   LLVM_DEBUG(sequence.print(DBGS()));
 }
 
@@ -286,11 +286,11 @@ Value mlir::iree_compiler::buildVectorize(ImplicitLocOpBuilder &b, Value funcH,
 }
 
 Value mlir::iree_compiler::buildLowerMaskedTransfersAndCleanup(
-    ImplicitLocOpBuilder &b, Value containingOpH) {
+    ImplicitLocOpBuilder &b, Value containingOpH, bool cleanup) {
   // TODO: avoid functional style transform so we can apply to the variant.
   containingOpH = b.create<transform::LowerMaskedTransfersOp>(
       containingOpH.getType(), containingOpH);
-  {
+  if (cleanup) {
     ApplyPatternsOpPatterns configuration;
     configuration.rankReducingLinalg = true;
     configuration.rankReducingVector = true;
@@ -300,14 +300,14 @@ Value mlir::iree_compiler::buildLowerMaskedTransfersAndCleanup(
 }
 
 Value mlir::iree_compiler::buildLowerVectorMasksAndCleanup(
-    ImplicitLocOpBuilder &b, Value containingOpH) {
+    ImplicitLocOpBuilder &b, Value containingOpH, bool cleanup) {
   // TODO: not a functional style op to avoid invalidating artificially.
   containingOpH = b.create<transform::LowerMasksOp>(
       pdl::OperationType::get(b.getContext()), containingOpH);
   // TODO: not a functional style op to avoid invalidating artificially.
   containingOpH = b.create<transform::MaterializeMasksOp>(
       pdl::OperationType::get(b.getContext()), containingOpH);
-  {
+  if (cleanup) {
     ApplyPatternsOpPatterns config;
     config.foldMemrefAliases = true;
     iree_compiler::buildCanonicalizationAndEnablingTransforms(b, config,
