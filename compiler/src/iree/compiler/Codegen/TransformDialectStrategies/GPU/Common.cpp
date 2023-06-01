@@ -547,7 +547,7 @@ void mlir::iree_compiler::gpu::buildMatmulVectorization(
   // TODO: avoid functional style transform so we can apply to the variant.
   if (!strategy.alignedLhs() || !strategy.alignedRhs() ||
       !strategy.alignedRes()) {
-    funcH = buildLowerMaskedTransfersAndCleanup(b, funcH);
+    funcH = buildLowerMaskedTransfersAndCleanup(b, funcH, /*cleanup=*/false);
   }
 
   // Apply vectorization + cleanups to what remains.
