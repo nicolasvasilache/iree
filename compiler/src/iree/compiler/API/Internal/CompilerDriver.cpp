@@ -66,6 +66,7 @@
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/CAPI/IR.h"
 #include "mlir/CAPI/Wrap.h"
+#include "mlir/Dialect/Transform/Transforms/TransformInterpreterUtils.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dialect.h"
@@ -86,6 +87,12 @@
 
 #define IREE_COMPILER_API_MAJOR 1
 #define IREE_COMPILER_API_MINOR 4
+
+llvm::cl::opt<std::string> transformFilename(
+    "iree-preloaded-transforms",
+    llvm::cl::desc(
+        "transform dialect file name containing preloaded strategies that can "
+        "be applied on demand to complement the IREE compiler"));
 
 namespace mlir::iree_compiler::embed {
 namespace {
@@ -267,6 +274,21 @@ Session::Session(GlobalInit &globalInit)
       pluginSession(globalInit.pluginManager, binder, pluginManagerOptions) {
   context.allowUnregisteredDialects();
   context.appendDialectRegistry(globalInit.registry);
+
+  // Optionally, preload a transform dialect library into the context.
+  // TODO: use the resource mechanism when available.
+  if (!transformFilename.empty()) {
+    auto *dialect = context.getOrLoadDialect<transform::TransformDialect>();
+    ParserConfig parserConfig(&context);
+    OwningOpRef<ModuleOp> transformLibrary;
+    if (failed(transform::detail::parseTransformInterpreterModule(
+            &context, transformFilename, transformLibrary))) {
+      llvm::errs() << "Failed to parse library file: " << transformFilename
+                   << "\n";
+      abort();
+    }
+    dialect->registerLibraryModule(std::move(transformLibrary));
+  }
 
   // Bootstrap session options from the cl environment, if enabled.
   if (globalInit.usesCommandLine) {

@@ -28,6 +28,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Transforms.h"
+#include "mlir/Dialect/Transform/IR/TransformDialect.h"
 #include "mlir/Dialect/Utils/IndexingUtils.h"
 #include "mlir/Dialect/Utils/StaticValueUtils.h"
 #include "mlir/IR/Matchers.h"
@@ -89,11 +90,6 @@ static llvm::cl::opt<bool>
                         llvm::cl::init(true));
 
 // Non-static options are used in other places.
-llvm::cl::opt<std::string> clCPUCodegenTransformDialectFileName(
-    "iree-codegen-llvmcpu-use-transform-dialect",
-    llvm::cl::desc(
-        "MLIR file containing a transform dialect specification to apply"),
-    llvm::cl::init(""));
 llvm::cl::opt<bool> clCPUEnableTransformDialectJit(
     "iree-codegen-llvmcpu-enable-transform-dialect-jit",
     llvm::cl::desc("enable the usage of the transform dialect JIT"),
@@ -2396,7 +2392,10 @@ LogicalResult initCPULaunchConfig(ModuleOp moduleOp) {
       continue;
 
     // If using the transform dialect with a script file, intercept early.
-    if (!clCPUCodegenTransformDialectFileName.empty()) {
+    // TODO: use resources and avoid querying the dialect.
+    auto *transformDialect =
+        moduleOp.getContext()->getOrLoadDialect<transform::TransformDialect>();
+    if (!transformDialect->getLibraryModules().empty()) {
       assert(!clCPUEnableTransformDialectJit &&
              "Can't use both transform dialect interpreted and jitted modes");
       auto translationInfo = IREE::Codegen::TranslationInfoAttr::get(

@@ -147,6 +147,8 @@ int ireeOptRunMain(int argc, char **argv) {
   // TODO: this should be upstreamed.
   mlir::linalg::transform::registerDropSchedulePass();
 
+  // TODO: preload a transform dialect library, use the resource mechanism when
+  // available.
   if (failed(ireeOptMainFromCL(argc, argv, "IREE modular optimizer driver\n",
                                registry))) {
     return 1;

@@ -24,9 +24,6 @@ iree_lit_test_suite(
     "reduction_v2.mlir"
     "reduction_v2_uneven.mlir"
     "softmax.mlir"
-    "softmax_partial.mlir"
-    "softmax_v2.mlir"
-    "vecadd2d.mlir"
   TOOLS
     FileCheck
     iree-compile
@@ -39,10 +36,7 @@ iree_lit_test_suite(
     reduction_codegen_spec.mlir
     reduction_eltwise_codegen_spec.mlir
     reduction_v2_codegen_spec.mlir
-    softmax_codegen_spec.mlir
-    softmax_dispatch_spec.mlir
-    softmax_partial_codegen_spec.mlir
-    softmax_v2_codegen_spec.mlir
+    softmax_transform_spec.mlir
     vecadd2d_codegen_spec.mlir
     vecadd2d_codegen_spec_partial_tile.mlir
   LABELS

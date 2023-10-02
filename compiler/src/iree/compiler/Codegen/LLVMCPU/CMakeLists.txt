@@ -32,7 +32,6 @@ iree_cc_library(
     MLIRMemRefDialect
     MLIRPass
     MLIRTransforms
-    iree::compiler::Codegen::Dialect::IREECodegenDialect
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Utils
   PUBLIC
@@ -76,6 +75,7 @@ iree_cc_library(
   DEPS
     ::PassHeaders
     ::PassesIncGen
+    iree::compiler::Codegen::Dialect::IREECodegenDialect
     IREELinalgExtDialect
     IREELinalgExtPasses
     IREELinalgExtUtils

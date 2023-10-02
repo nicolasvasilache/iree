@@ -94,12 +94,6 @@ static llvm::cl::opt<std::string> clDumpDispatchGraphOutputFile(
     llvm::cl::desc("Output file name for a dispatch graph dump."),
     llvm::cl::init("dispatch.dot"));
 
-static llvm::cl::opt<std::string> clDispatchTransformFileName(
-    "iree-flow-dispatch-use-transform-dialect",
-    llvm::cl::desc("MLIR file containing a top-level module that specifies "
-                   "the transformations to apply to form dispatch regions."),
-    llvm::cl::init(""));
-
 static llvm::cl::opt<bool> clZeroFillEmptyTensors(
     "iree-flow-zero-fill-empty-tensors",
     llvm::cl::desc(
@@ -150,11 +144,9 @@ void buildFlowTransformPassPipeline(OpPassManager &passManager,
                          createInterchangeTransposeGenericOpsPass)
       ////////////////////////////////////////////////////////////////////////
       // Dispatch region formation.
-      .addPredicatedPass(!clDispatchTransformFileName.empty(),
-                         [&]() {
-                           return createDispatchWithTransformDialect(
-                               clDispatchTransformFileName);
-                         })
+      // TODO: predicate on an option passed through TransformOptions.
+      .addPredicatedPass(true,
+                         [&]() { return createDispatchWithTransformDialect(); })
 
       .addPass(createFormScalarDispatchesPass)
       // Only want use the transform dialect for some dispatch regions and let
