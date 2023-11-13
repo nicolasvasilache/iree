@@ -95,6 +95,15 @@ declare_mlir_dialect_python_bindings(
   DIALECT_NAME vm
 )
 
+declare_mlir_dialect_extension_python_bindings(
+  ADD_TO_PARENT IREEPythonSources.Dialects
+  ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
+  TD_FILE dialects/TransformCommonExtensionsOps.td
+  SOURCES dialects/transform/iree_common.py
+  DIALECT_NAME transform
+  EXTENSION_NAME iree_transform_common
+)
+
 declare_mlir_python_sources(IREECompilerAPIPythonTools
   ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/iree/compiler"
   SOURCES
@@ -137,22 +146,32 @@ set(_SOURCE_COMPONENTS
 
   MLIRPythonSources.Core
 
-  # Core dialects (constrained to IREE input dialects).
+  # Core dialects (constrained to IREE input dialects and relevant transforms).
   MLIRPythonSources.Dialects.arith
+  MLIRPythonSources.Dialects.bufferization
+  MLIRPythonSources.Dialects.bufferization_transform
   MLIRPythonSources.Dialects.builtin
   MLIRPythonSources.Dialects.cf
   MLIRPythonSources.Dialects.complex
   MLIRPythonSources.Dialects.func
+  MLIRPythonSources.Dialects.gpu
+  MLIRPythonSources.Dialects.gpu_transform
   MLIRPythonSources.Dialects.linalg
   MLIRPythonSources.Dialects.math
+  MLIRPythonSources.Dialects.loop_transform
   MLIRPythonSources.Dialects.memref
+  MLIRPythonSources.Dialects.memref_transform
+  MLIRPythonSources.Dialects.nvgpu_transform
   MLIRPythonSources.Dialects.pdl
+  MLIRPythonSources.Dialects.scf
   MLIRPythonSources.Dialects.shape
   MLIRPythonSources.Dialects.structured_transform
   MLIRPythonSources.Dialects.tensor
+  MLIRPythonSources.Dialects.tensor_transform
   MLIRPythonSources.Dialects.tosa
   MLIRPythonSources.Dialects.transform
   MLIRPythonSources.Dialects.vector
+  MLIRPythonSources.Dialects.vector_transform
 
   # iree-dialects project.
   IREEDialectsPythonSources
