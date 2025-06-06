@@ -691,6 +691,15 @@ void addCPUDefaultPassPipeline(OpPassManager &funcPassManager,
         tilingConfig->getVectorCommonParallelLevel()));
   }
   addCPUBufferizePasses(funcPassManager);
+
+  // Run IREE specific passes before vector lowering expert.
+  funcPassManager.addPass(createPropagateDispatchSizeBoundsPass());
+  funcPassManager.addPass(createRemoveSingleIterationLoopPass());
+  {
+    LLVMCPUVectorLoweringPassOptions options;
+    options.splitVectorTransfersTo = "linalg-copy";
+    buildLLVMCPUVectorLoweringPipeline(funcPassManager, options);
+  }
 }
 
 static void addLowerToLLVMPasses(OpPassManager &modulePassManager,
