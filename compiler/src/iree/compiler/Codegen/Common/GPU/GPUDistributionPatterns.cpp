@@ -57,6 +57,30 @@ struct DistributeConstants final : OpDistributionPattern<arith::ConstantOp> {
   }
 };
 
+struct DistributeSplat final : OpDistributionPattern<vector::SplatOp> {
+  using OpDistributionPattern::OpDistributionPattern;
+
+  LogicalResult matchAndRewrite(vector::SplatOp splatOp,
+                                DistributionSignature &signature,
+                                PatternRewriter &rewriter) const override {
+    auto splat = dyn_cast<VectorValue>(splatOp.getResult());
+    if (!splat)
+      return failure();
+
+    VectorLayoutInterface layout = signature[splat];
+
+    // Replace the original op with the distributed op.
+    Type elementType = splat.getType().getElementType();
+    auto vectorType =
+        VectorType::get(layout.getDistributedShape(), elementType);
+    auto distributedOp = rewriter.create<vector::SplatOp>(
+        splatOp.getLoc(), vectorType, splatOp.getInput());
+    replaceOpWithDistributedValues(rewriter, splatOp,
+                                   distributedOp->getResult(0));
+    return success();
+  }
+};
+
 struct DistributeElementwise final
     : OpTraitDistributionPattern<OpTrait::Elementwise> {
   using OpTraitDistributionPattern::OpTraitDistributionPattern;
@@ -336,7 +360,7 @@ struct DistributeTrivialExtract final
 } // namespace
 
 void populateGPUDistributionPatterns(RewritePatternSet &patterns) {
-  patterns.add<DistributeConstants, DistributeScfFor, DistributeTrivialExtract>(
+  patterns.add<DistributeConstants, DistributeScfFor, DistributeSplat, DistributeTrivialExtract>(
       patterns.getContext());
   // Elementwise patterns.
   patterns.add<DistributeElementwise>(patterns.getContext());
