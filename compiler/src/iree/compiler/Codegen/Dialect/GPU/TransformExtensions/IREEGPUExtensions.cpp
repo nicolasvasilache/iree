@@ -317,6 +317,62 @@ void transform_dialect::FuseExtractSliceIntoForallOp::getEffects(
   transform::modifiesPayload(effects);
 }
 
+//===----------------------------------------------------------------------===//
+// InferAndAttachVectorContractLayoutOp
+//===----------------------------------------------------------------------===//
+DiagnosedSilenceableFailure
+transform::InferAndAttachVectorContractLayoutOp::apply(
+    transform::TransformRewriter &rewriter,
+    transform::TransformResults &results, transform::TransformState &state) {
+  SmallVector<Operation *> contractionsWithLayout;
+  for (Operation *op : state.getPayloadOps(getTarget())) {
+    auto contractionOp = dyn_cast<vector::ContractionOp>(op);
+    if (!contractionOp)
+      return emitDefiniteFailure() << "requires a vector.contract";
+
+    FailureOr<iree_compiler::VectorContractOpInfo> info =
+        iree_compiler::VectorContractOpInfo::inferFromIndexingMaps(
+            contractionOp.getIndexingMapsArray());
+    if (failed(info))
+      return emitDefiniteFailure() << "VectorInfo could not be computed";
+
+    using namespace iree_compiler::IREE;
+    using namespace iree_compiler::IREE::GPU;
+    auto intrinsicMma = cast<MMAAttr>(state.getParams(getLayout()).front());
+    auto scheduleAttr =
+        MMAScheduleAttr::get(getContext(), intrinsicMma,
+                             /*subgroup_m_count=*/1, /*subgroup_n_count=*/1);
+    FailureOr<std::tuple<VectorExt::VectorLayoutInterface,
+                         VectorExt::VectorLayoutInterface,
+                         VectorExt::VectorLayoutInterface>>
+        layouts = scheduleAttr.getContractionLayout(*info, contractionOp);
+    if (failed(layouts))
+      return emitDefiniteFailure()
+             << "MMAScheduleAttr::getContractionLayout failed";
+
+    insertToLayoutOp(rewriter, contractionOp.getOperand(0),
+                     std::get<0>(*layouts));
+    insertToLayoutOp(rewriter, contractionOp.getOperand(1),
+                     std::get<1>(*layouts));
+    insertToLayoutOp(rewriter, contractionOp.getOperand(2),
+                     std::get<2>(*layouts));
+    contractionOp->setAttr("iree.amdgpu.mma", intrinsicMma);
+    insertToLayoutOp(rewriter, contractionOp->getResult(0),
+                     std::get<2>(*layouts));
+    contractionsWithLayout.push_back(contractionOp);
+  }
+  results.set(cast<OpResult>(getResult()), contractionsWithLayout);
+  return DiagnosedSilenceableFailure::success();
+}
+
+void transform::InferAndAttachVectorContractLayoutOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::consumesHandle(getTargetMutable(), effects);
+  transform::onlyReadsHandle(getLayoutMutable(), effects);
+  transform::producesHandle(getOperation()->getResults(), effects);
+  transform::modifiesPayload(effects);
+}
+
 } // namespace mlir::iree_compiler::IREE
 
 void mlir::iree_compiler::registerTransformDialectIREEGPUExtension(

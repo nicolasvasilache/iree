@@ -296,4 +296,30 @@ def FuseExtractSliceIntoForallOp : Op<Transform_Dialect, "iree.fuse_extract_slic
   let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
 }
 
+def InferAndAttachVectorContractLayoutOp : Op<Transform_Dialect,
+    "brium.iree.gpu.infer_and_attach_vector_contract_layout",
+    [DeclareOpInterfaceMethods<TransformOpInterface>,
+     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+  let summary = "Requests a vector.contract to have specified layout.";
+  let description = [{
+    Requests a vector.contract operation to have a certain layout. This is
+    achieved by inserting `iree_vector_ext.to_layout` operations on each operand
+    and result, inferring the proper attribute types.
+
+    #### Return modes
+    Definitely fails if the target is not a `vector.contract` or if the layout
+    is not supported.
+    Suceeeds otherwise and returns a handle to the modified `vector.contract`
+    operation.
+  }];
+
+  let arguments = (ins TransformHandleTypeInterface:$target,
+                       TransformParamTypeInterface:$layout);
+  let results = (outs TransformHandleTypeInterface:$result);
+  let assemblyFormat = [{
+      `layout` `(` $layout `)` `to` $target attr-dict `:`
+      functional-type(operands, results)
+  }];
+}
+
 #endif // IREE_COMPILER_CODEGEN_DIALECT_GPU_TRANSFORMEXTENSIONS_IREEGPUEXTENSIONS
