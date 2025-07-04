@@ -10,7 +10,9 @@
 #include "iree/compiler/Codegen/Utils/GPUUtils.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/DebugLog.h"
+#include "llvm/Support/InterleavedRange.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
@@ -744,6 +746,48 @@ IREE::GPU::getContractionLayout(IREE::GPU::MMAScheduleAttr scheduleAttr,
                                 VectorContractOpInfo &opInfo,
                                 vector::ContractionOp contractOp) {
   return getContractionLayoutImpl(scheduleAttr, opInfo, contractOp);
+}
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os,
+                              VectorContractOpInfo info) {
+  os << "VectorContractOpInfo {\n";
+
+  auto printPair = [&](const char *name, const std::pair<int, int> &pair) {
+    os << "  " << name << ": (" << pair.first << ", " << pair.second << ")\n";
+  };
+
+  auto printVector = [&](const char *name, const auto &vac) {
+    os << "  " << name << ": [";
+    llvm::interleaveComma(vac, os);
+    os << "]\n";
+  };
+
+  printPair("LHS M-N Index", info.getOperandMNIndex());
+  printPair("LHS-RHS K Index", info.getOperandKIndex());
+  printPair("Result M-N Index", info.getResultMNIndex());
+
+  printVector("M Dims", info.getMDims());
+  printVector("N Dims", info.getNDims());
+  printVector("K Dims", info.getKDims());
+  printVector("Batch Dims", info.getBatchDims());
+
+  os << "  A Rank: " << info.getARank() << "\n";
+  os << "  B Rank: " << info.getBRank() << "\n";
+  os << "  C Rank: " << info.getCRank() << "\n";
+  os << "  Batch Count: " << info.getBatchCount() << "\n";
+
+  printVector("LHS M Dims", info.lhsMDims);
+  os << "  LHS K Dim: " << llvm::interleaved_array(info.lhsKDim) << "\n";
+  printVector("RHS N Dims", info.rhsNDims);
+  os << "  RHS K Dim: " << llvm::interleaved_array(info.rhsKDim) << "\n";
+  printVector("Out M Dims", info.outMDims);
+  printVector("Out N Dims", info.outNDims);
+  printVector("LHS Unit Dims", info.lhsUnitDims);
+  printVector("RHS Unit Dims", info.rhsUnitDims);
+  printVector("Acc Unit Dims", info.accUnitDims);
+
+  os << "}\n";
+  return os;
 }
 
 } // namespace mlir::iree_compiler
