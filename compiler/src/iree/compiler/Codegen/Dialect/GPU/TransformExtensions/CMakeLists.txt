@@ -38,9 +38,11 @@ iree_cc_library(
     MLIRTensorDialect
     MLIRTransformDialect
     MLIRTransformDialectInterfaces
+    MLIRVectorDialect
     MLIRVectorTransforms
     iree::compiler::Codegen::Dialect::GPU::IR::IREEGPUDialect
     iree::compiler::Codegen::Dialect::GPU::Transforms::GPUTransforms
+    iree::compiler::Codegen::LLVMGPU::Utils
   PUBLIC
 )
 

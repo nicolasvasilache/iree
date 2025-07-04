@@ -13,6 +13,7 @@ include "mlir/Dialect/Transform/IR/TransformAttrs.td"
 include "mlir/Dialect/Transform/IR/TransformDialect.td"
 include "mlir/Dialect/Transform/IR/TransformTypes.td"
 include "mlir/Dialect/Transform/Interfaces/TransformInterfaces.td"
+include "mlir/Interfaces/FunctionInterfaces.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/IR/OpBase.td"
 
@@ -292,6 +293,75 @@ def FuseExtractSliceIntoForallOp : Op<Transform_Dialect, "iree.fuse_extract_slic
   let assemblyFormat = [{
     $consumer `into` $producer attr-dict
     `:` functional-type(operands, results)
+  }];
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+}
+
+def InferAndAttachVectorContractLayoutOp : Op<Transform_Dialect,
+    "iree.infer_and_attach_vector_contract_layout",
+    [DeclareOpInterfaceMethods<TransformOpInterface>,
+     DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+     ReportTrackingListenerFailuresOpTrait]> {
+  let summary = "Requests a vector.contract to have specified layout.";
+  let description = [{
+    Requests a vector.contract operation to have a certain layout. This is
+    achieved by inserting `iree_vector_ext.to_layout` operations on each operand
+    and result, inferring the proper attribute types.
+
+    #### Return modes
+    Definitely fails if the target is not a `vector.contract` or if the layout
+    is not supported.
+    Suceeeds otherwise and returns a handle to the modified `vector.contract`
+    operation.
+  }];
+
+  let arguments = (ins TransformParamTypeInterface:$mma_attr,
+                       TransformHandleTypeInterface:$target);
+  let results = (outs TransformHandleTypeInterface:$result);
+  let assemblyFormat = [{
+      `mma_attr` `(` $mma_attr `)` `to` $target attr-dict `:`
+      functional-type(operands, results)
+  }];
+  let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
+}
+
+// TODO: this should move upstream.
+class TransformEachOp<string name,
+                      string kind = "::mlir::Operation *",
+                      list<Trait> traits = []>
+  : Op<Transform_Dialect, name, !listconcat(traits, [
+      TransformOpInterface, TransformEachOpTrait
+    ])> {
+  defvar applyMethodDeclaration = [{
+    ::mlir::DiagnosedSilenceableFailure applyToOne(
+      ::mlir::transform::TransformRewriter &rewriter,
+      }] # kind # [{ target,
+      ::mlir::transform::ApplyToEachResultList &results,
+      ::mlir::transform::TransformState &state);
+  }];
+  let extraClassDeclaration = applyMethodDeclaration;
+}
+
+def PropagateVectorDistributionOp : TransformEachOp<
+    "iree.propagate_vector_distribution",
+    "::mlir::FunctionOpInterface ", [
+      DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+      TransformEachOpTrait,
+      TransformOpInterface,
+      ReportTrackingListenerFailuresOpTrait
+    ]> {
+  let description = [{
+    Run IREE's Codegen LLVMGPUVectorDistribution patterns on the target as the
+    root. It distributes vectorized functions to the GPU.
+  }];
+  let arguments = (ins
+      TransformHandleTypeInterface:$target,
+      ConfinedAttr<DenseI64ArrayAttr, [DenseArrayCount<3>]>:$workgroup_size,
+      DefaultValuedOptionalAttr<I64Attr, "64">:$subgroup_size);
+  let results = (outs);
+  let assemblyFormat = [{
+    $target `workgroup_size` `=` $workgroup_size
+    (`subgroup_size` `=` $subgroup_size^)? attr-dict `:` type($target)
   }];
   let cppNamespace = "mlir::iree_compiler::IREE::transform_dialect";
 }

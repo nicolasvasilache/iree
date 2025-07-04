@@ -24,6 +24,7 @@ class ContractionOp;
 
 namespace iree_compiler {
 class VectorContractOpInfo;
+llvm::raw_ostream &operator<<(llvm::raw_ostream &os, VectorContractOpInfo info);
 
 class ContractionVectorLayoutOptions : public VectorLayoutOptions {
 public:
